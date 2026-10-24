@@ -49,5 +49,43 @@ public static class AssessmentMapping
         a.Result?.ScoreCards.Select(s => new ScoreCardView(s.Dimension, s.Score)).ToArray() ?? [],
         a.Result?.Findings.Select(f => new FindingView(f.Title, f.Description, f.Category, f.Severity, f.RecommendationText)).ToArray() ?? [],
         a.Result?.Recommendations.OrderBy(r => r.Priority).Select(r => new RecommendationView(r.Priority, r.Title, r.Description, r.Timeframe)).ToArray() ?? [],
-        a.Artifacts.Select(x => x.OriginalFileName).ToArray());
+        a.Artifacts.Select(x => x.OriginalFileName).ToArray(),
+        a.Insights.OrderByDescending(i => i.CreatedDate).Select(Insight).ToArray(),
+        a.AIQuestions.OrderByDescending(q => q.AskedAt).Select(q => new AIQuestionView(q.Id, q.Question, q.Answer, q.Status, q.AskedAt, q.ModelName, q.PromptVersion, q.TokenUsage, q.ErrorMessage)).ToArray());
+
+    private static AssessmentInsightView Insight(AssessmentInsight i) => new(i.Id, i.Status, i.ExecutiveSummary, i.CurrentState, ReadStrings(i.KeyRisksJson), i.BusinessImpact, i.OperationalRisk, i.TechnicalDebtImpact, i.CloudReadiness, i.DeliveryVelocityImpact, i.DataAndReportingImpact, i.RiskNarrative, i.RecommendedStrategy, ReadStrings(i.RecommendedNextStepsJson), i.ExpectedOutcome, i.Confidence, i.CreatedDate, i.GeneratedAt, i.ModelName, i.PromptVersion, i.TokenUsage, i.ErrorMessage,
+        i.Recommendations.OrderBy(r => r.Priority).Select(r => new AIRecommendationView(r.Priority, r.Title, r.Description, r.BusinessBenefit, r.EstimatedComplexity, r.ExpectedOutcome)).ToArray(),
+        i.Roadmap.OrderBy(r => r.Sequence).Select(r => new AIInsightRoadmapView(r.Sequence, r.Period, r.ActivityType.ToString(), r.Title, r.Description, r.ExpectedOutcome)).ToArray());
+
+    private static IReadOnlyList<string> ReadStrings(string json)
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<string[]>(json) ?? []; }
+        catch (System.Text.Json.JsonException) { return []; }
+    }
+}
+
+public static class AssessmentComparisonService
+{
+    public static AssessmentComparisonView Compare(Assessment baseline, Assessment comparison)
+    {
+        if (baseline.AssessmentType != comparison.AssessmentType) throw new ArgumentException("Assessments must have the same type to compare.");
+        if (baseline.Result is null || comparison.Result is null || baseline.Status != AssessmentStatus.Completed || comparison.Status != AssessmentStatus.Completed)
+            throw new ArgumentException("Both assessments must be completed before they can be compared.");
+        var first = baseline.Result.Findings.Select(Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var second = comparison.Result.Findings.Select(Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolved = baseline.Result.Findings.Where(f => !second.Contains(Identity(f))).Select(View).ToArray();
+        var added = comparison.Result.Findings.Where(f => !first.Contains(Identity(f))).Select(View).ToArray();
+        var delta = comparison.Result.OverallScore - baseline.Result.OverallScore;
+        var severities = Enum.GetValues<FindingSeverity>().Select(severity =>
+        {
+            var before = baseline.Result.Findings.Count(f => f.Severity == severity);
+            var after = comparison.Result.Findings.Count(f => f.Severity == severity);
+            return new SeverityChangeView(severity, before, after, after - before);
+        }).ToArray();
+        return new AssessmentComparisonView(baseline.Id, baseline.Name, comparison.Id, comparison.Name, baseline.AssessmentType, baseline.Result.OverallScore, comparison.Result.OverallScore, delta, delta > 0 ? "Improved" : delta < 0 ? "Declined" : "Unchanged", resolved, added,
+            resolved.Select(f => f.Category).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), added.Select(f => f.Category).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), severities, null, null);
+    }
+
+    private static string Identity(Finding f) => $"{f.Category.Trim().ToLowerInvariant()}|{f.Title.Trim().ToLowerInvariant()}";
+    private static FindingChangeView View(Finding f) => new(f.Title, f.Description, f.Category, f.Severity);
 }

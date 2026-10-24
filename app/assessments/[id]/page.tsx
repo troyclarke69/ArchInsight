@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, Clock3, Download, FileJson, LoaderCircle, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, Clock3, Download, FileJson, LoaderCircle, Send, ShieldAlert, Sparkles } from "lucide-react";
 
 type Severity = "Critical" | "High" | "Medium" | "Low";
-type Assessment = { id: string; name: string; organizationName: string; assessmentType: string; status: string; createdDate: string; completedDate: string | null; score: number | null; recommendation: string | null; executiveSummary: string | null; applicationCount: number; errorMessage: string | null; scoreCards: { dimension: string; score: number }[]; findings: { title: string; description: string; category: string; severity: Severity; recommendation: string }[]; recommendations: { priority: number; title: string; description: string; timeframe: string }[]; artifactNames: string[] };
+type Insight = { id: string; status: string; executiveSummary: string | null; currentState: string | null; keyRisks: string[]; businessImpact: string | null; operationalRisk: string | null; technicalDebtImpact: string | null; cloudReadiness: string | null; deliveryVelocityImpact: string | null; dataAndReportingImpact: string | null; riskNarrative: string | null; recommendedStrategy: string | null; recommendedNextSteps: string[]; expectedOutcome: string | null; confidence: string | null; createdDate: string; generatedAt: string | null; modelName: string | null; promptVersion: string | null; tokenUsage: number | null; errorMessage: string | null; recommendations: { priority: number; title: string; description: string; businessBenefit: string; estimatedComplexity: string; expectedOutcome: string }[]; roadmap: { sequence: number; period: string; activityType: string; title: string; description: string; expectedOutcome: string }[] };
+type Question = { id: string; question: string; answer: string | null; status: string; askedAt: string; modelName: string | null; tokenUsage: number | null; errorMessage: string | null };
+type Assessment = { id: string; name: string; organizationName: string; assessmentType: string; status: string; createdDate: string; completedDate: string | null; score: number | null; recommendation: string | null; executiveSummary: string | null; applicationCount: number; errorMessage: string | null; scoreCards: { dimension: string; score: number }[]; findings: { title: string; description: string; category: string; severity: Severity; recommendation: string }[]; recommendations: { priority: number; title: string; description: string; timeframe: string }[]; artifactNames: string[]; insights: Insight[]; aiQuestions: Question[] };
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5080").replace(/\/$/, "");
 const groups: Severity[] = ["Critical", "High", "Medium", "Low"];
 
@@ -14,32 +16,69 @@ export default function AssessmentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<Assessment | null>(null);
   const [error, setError] = useState("");
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [questionError, setQuestionError] = useState("");
+  const [questionNotice, setQuestionNotice] = useState("");
+  const [regenerating, setRegenerating] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiBase}/api/assessments/${id}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(response.status === 404 ? "Assessment not found." : "Could not load this assessment.");
+      setData(await response.json()); setError("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Assessment API is unavailable."); }
+  }, [id]);
+
+  useEffect(() => { void load(); }, [load]);
+  const aiStatus = data?.insights?.[0]?.status;
   useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/assessments/${id}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(response.status === 404 ? "Assessment not found." : "Could not load this assessment.");
-        if (alive) { setData(await response.json()); setError(""); }
-      } catch (e) { if (alive) setError(e instanceof Error ? e.message : "Assessment API is unavailable."); }
-    };
-    void load();
-    const timer = window.setInterval(() => { if (data?.status === "Pending" || data?.status === "Running") void load(); }, 1600);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, [id, data?.status]);
+    if (data?.status !== "Pending" && data?.status !== "Running" && aiStatus !== "Pending" && aiStatus !== "Running") return;
+    const timer = window.setInterval(() => { void load(); }, 1600);
+    return () => window.clearInterval(timer);
+  }, [data?.status, aiStatus, load]);
+
+  const submitQuestion = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!question.trim()) return;
+    setAsking(true); setQuestionError(""); setQuestionNotice("");
+    try {
+      const response = await fetch(`${apiBase}/api/assessments/${id}/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: question.trim() }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.detail || body.title || "Could not answer that question.");
+      setQuestion(""); setQuestionNotice("Answer saved with this assessment."); await load();
+    } catch (e) { setQuestionError(e instanceof Error ? e.message : "Could not answer that question."); await load(); }
+    finally { setAsking(false); }
+  };
+
+  const regenerate = async () => {
+    setRegenerating(true); setQuestionError(""); setQuestionNotice("");
+    try {
+      const response = await fetch(`${apiBase}/api/assessments/${id}/insights/regenerate`, { method: "POST" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.detail || body.title || "Could not queue insight generation.");
+      setQuestionNotice("Insight generation queued. Deterministic results remain unchanged."); await load();
+    } catch (e) { setQuestionError(e instanceof Error ? e.message : "Could not queue insight generation."); }
+    finally { setRegenerating(false); }
+  };
 
   if (!data && !error) return <main className="detail-loading"><LoaderCircle size={22} className="spin" />Loading assessment results…</main>;
   if (error || !data) return <main className="detail-page"><Link href="/" className="back-link"><ArrowLeft size={15} />Dashboard</Link><div className="api-alert"><ShieldAlert size={18} /><div><b>Unable to open assessment</b><span>{error}</span></div></div></main>;
 
   const formatDate = (date: string | null) => date ? new Date(date).toLocaleString() : "—";
   const statusClass = data.status.toLowerCase();
+  const insight = data.insights?.[0];
   return <main className="detail-page"><div className="detail-topline"><Link href="/" className="back-link"><ArrowLeft size={15} />Back to dashboard</Link><button className="button secondary" onClick={() => window.print()}><Download size={14} />Print / save PDF</button></div><div className="detail-heading"><div><div className="eyebrow"><span className="live-dot" />ASSESSMENT RESULTS</div><h1>{data.name}</h1><p>{data.organizationName} <span>·</span> {data.assessmentType.replace(/([A-Z])/g, " $1").trim()} <span>·</span> Created {formatDate(data.createdDate)}</p></div><span className={`detail-status ${statusClass}`}>{data.status === "Completed" ? <CheckCircle2 size={14} /> : data.status === "Failed" ? <CircleAlert size={14} /> : <Clock3 size={14} />}{data.status}</span></div>
     {data.status === "Pending" || data.status === "Running" ? <div className="running-banner"><LoaderCircle size={17} className="spin" /><div><b>Assessment is running</b><span>Your JSON artifacts are being evaluated by deterministic rules. This page refreshes automatically.</span></div></div> : null}
     {data.status === "Failed" && <div className="api-alert"><CircleAlert size={18} /><div><b>Assessment failed</b><span>{data.errorMessage || "The uploaded data did not match the assessment schema."}</span></div></div>}
-    {data.status === "Completed" && <><section className="result-summary"><div className="result-score"><span>Overall score</span><strong>{data.score}<small> / 100</small></strong><em>{data.recommendation}</em></div><div className="summary-copy"><h2>Executive summary</h2><p>{data.executiveSummary}</p><div className="summary-meta"><span>{data.assessmentType === "DataMaturity" ? `${data.scoreCards.length} dimensions scored` : `${data.applicationCount} systems assessed`}</span><span>{data.findings.length} findings</span><span>Completed {formatDate(data.completedDate)}</span></div></div></section>
-      {data.scoreCards.length > 1 && <section className="detail-section"><div className="section-heading"><div><h2>Scorecard</h2><p>Scores calculated from reported evidence</p></div></div><div className="scorecard-grid">{data.scoreCards.map((card) => <div className="scorecard-item" key={card.dimension}><div><b>{card.dimension}</b><strong>{card.score}</strong></div><div className="domain-track"><i style={{ width: `${card.score}%` }} /></div></div>)}</div></section>}
+    {data.status === "Completed" && <><section className="result-summary"><div className="result-score"><span>Overall score</span><strong>{data.score}<small> / 100</small></strong><em>{data.recommendation}</em></div><div className="summary-copy"><h2>Deterministic executive summary</h2><p>{data.executiveSummary}</p><div className="summary-meta"><span>{data.assessmentType === "DataMaturity" ? `${data.scoreCards.length} dimensions scored` : `${data.applicationCount} systems assessed`}</span><span>{data.findings.length} findings</span><span>Completed {formatDate(data.completedDate)}</span></div></div></section>
+      <section className="detail-section ai-detail-section"><div className="section-heading"><div><h2><Sparkles size={16} /> AI insights</h2><p>Generated from structured assessment results. Deterministic scores and recommendations remain authoritative.</p></div><button className="button secondary" disabled={regenerating || insight?.status === "Pending" || insight?.status === "Running"} onClick={() => void regenerate()}>{regenerating || insight?.status === "Pending" || insight?.status === "Running" ? <LoaderCircle size={13} className="spin" /> : <Sparkles size={13} />}{insight?.status === "Completed" ? "Regenerate" : "Generate insight"}</button></div>
+        {insight?.status === "Completed" ? <><div className="ai-detail-meta"><span className={`confidence-badge ${(insight.confidence || "low").toLowerCase()}`}>{insight.confidence || "Low"} confidence</span><span>{insight.modelName || "AI provider"}</span><span>{insight.tokenUsage ?? 0} tokens</span><span>Generated {formatDate(insight.generatedAt)}</span></div><div className="ai-detail-grid"><article className="ai-detail-card ai-detail-wide"><h3>Executive summary</h3><p>{insight.executiveSummary}</p></article><article className="ai-detail-card"><h3>Current state</h3><p>{insight.currentState}</p></article><article className="ai-detail-card"><h3>Key risks</h3>{insight.keyRisks.length ? <ul>{insight.keyRisks.map((risk, i) => <li key={`${i}-${risk}`}>{risk}</li>)}</ul> : <p>No key risks reported.</p>}</article><article className="ai-detail-card"><h3>Business impact</h3><p>{insight.businessImpact}</p></article><article className="ai-detail-card"><h3>Risk narrative</h3><p>{insight.riskNarrative}</p></article><article className="ai-detail-card"><h3>Operational risk</h3><p>{insight.operationalRisk}</p></article><article className="ai-detail-card"><h3>Technical debt impact</h3><p>{insight.technicalDebtImpact}</p></article><article className="ai-detail-card"><h3>Cloud readiness</h3><p>{insight.cloudReadiness}</p></article><article className="ai-detail-card"><h3>Delivery velocity</h3><p>{insight.deliveryVelocityImpact}</p></article><article className="ai-detail-card"><h3>Data and reporting</h3><p>{insight.dataAndReportingImpact}</p></article><article className="ai-detail-card ai-detail-wide"><h3>Recommended strategy</h3><p>{insight.recommendedStrategy}</p>{insight.recommendedNextSteps.length > 0 && <ol>{insight.recommendedNextSteps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol>}<b className="expected-outcome">Expected outcome: {insight.expectedOutcome}</b></article></div><div className="section-heading ai-subheading"><div><h2>AI recommendations</h2><p>Advisory actions, distinct from the deterministic recommendation list below</p></div></div><div className="ai-rec-grid">{insight.recommendations.map((rec) => <article className="ai-rec-card" key={`${rec.priority}-${rec.title}`}><span>Priority {rec.priority} · {rec.estimatedComplexity}</span><b>{rec.title}</b><p>{rec.description}</p><small><strong>Benefit:</strong> {rec.businessBenefit}</small></article>)}</div><div className="section-heading ai-subheading"><div><h2>AI roadmap</h2><p>Suggested sequencing for 0–24 months</p></div></div><div className="ai-roadmap-grid">{insight.roadmap.map((item) => <article className="ai-roadmap-card" key={`${item.sequence}-${item.period}`}><span>{item.period} · {item.activityType}</span><b>{item.title}</b><p>{item.description}</p><small>{item.expectedOutcome}</small></article>)}</div></> : <div className="ai-empty detail-ai-empty">{insight?.status === "Pending" || insight?.status === "Running" ? "AI insight generation is in progress…" : insight?.errorMessage || (insight?.status === "Failed" ? "Insight generation failed." : "No AI insight has been generated yet. Configure a provider to enable insights.")}{insight?.status !== "Pending" && insight?.status !== "Running" && <button onClick={() => void regenerate()} disabled={regenerating}>{regenerating ? "Queueing…" : "Generate insight"}</button>}</div>}
+      </section>
+      <section className="detail-section"><div className="section-heading"><div><h2>Scorecard</h2><p>Scores calculated from reported evidence</p></div></div><div className="scorecard-grid">{data.scoreCards.map((card) => <div className="scorecard-item" key={card.dimension}><div><b>{card.dimension}</b><strong>{card.score}</strong></div><div className="domain-track"><i style={{ width: `${card.score}%` }} /></div></div>)}</div></section>
       <section className="detail-section"><div className="section-heading"><div><h2>Findings</h2><p>{data.findings.length} rule-based findings grouped by severity</p></div></div>{data.findings.length ? <div className="severity-groups">{groups.map((group) => { const findings = data.findings.filter((item) => item.severity === group); return findings.length ? <section className="severity-group" key={group}><h3><span className={`severity ${group.toLowerCase()}`}>{group}</span>{findings.length} {findings.length === 1 ? "finding" : "findings"}</h3>{findings.map((finding, index) => <article className="detail-finding" key={`${finding.title}-${index}`}><div><b>{finding.title}</b><span>{finding.category}</span></div><p>{finding.description}</p><div className="finding-recommendation"><b>Suggested action</b><span>{finding.recommendation}</span></div></article>)}</section> : null; })}</div> : <div className="empty-panel">No inconsistencies or rule violations were found in the uploaded evidence.</div>}</section>
-      <section className="detail-section"><div className="section-heading"><div><h2>Recommendations & roadmap</h2><p>Prioritized actions from the assessment rules</p></div></div>{data.recommendations.length ? <div className="detail-roadmap">{data.recommendations.map((rec) => <article className="detail-recommendation" key={`${rec.priority}-${rec.title}`}><div className="recommendation-priority">{rec.priority}</div><div><span>{rec.timeframe}</span><b>{rec.title}</b><p>{rec.description}</p></div><ArrowRight size={15} /></article>)}</div> : <div className="empty-panel">No additional actions were generated.</div>}</section></>}
+      <section className="detail-section"><div className="section-heading"><div><h2>Deterministic recommendations & roadmap</h2><p>Prioritized actions from the assessment rules</p></div></div>{data.recommendations.length ? <div className="detail-roadmap">{data.recommendations.map((rec) => <article className="detail-recommendation" key={`${rec.priority}-${rec.title}`}><div className="recommendation-priority">{rec.priority}</div><div><span>{rec.timeframe}</span><b>{rec.title}</b><p>{rec.description}</p></div><ArrowRight size={15} /></article>)}</div> : <div className="empty-panel">No additional actions were generated.</div>}</section>
+      <section className="detail-section qa-section"><div className="section-heading"><div><h2>Ask about this assessment</h2><p>Questions are answered from this assessment’s structured facts and saved insight.</p></div></div><form className="question-form" onSubmit={submitQuestion}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={1000} placeholder="Ask about risks, tradeoffs, or recommended next steps…" aria-label="Question about this assessment" /><button className="button primary" disabled={asking || !question.trim()}>{asking ? <LoaderCircle size={13} className="spin" /> : <Send size={13} />}{asking ? "Asking…" : "Ask"}</button></form>{questionNotice && <div className="question-notice">{questionNotice}</div>}{questionError && <div className="form-error">{questionError}</div>}{data.aiQuestions.length > 0 && <div className="question-history">{data.aiQuestions.map((item) => <article className="question-item" key={item.id}><b>{item.question}</b>{item.answer ? <p>{item.answer}</p> : <p className="question-state">{item.errorMessage || item.status}</p>}<small>{formatDate(item.askedAt)}{item.modelName ? ` · ${item.modelName} · ${item.tokenUsage ?? 0} tokens` : ""}</small></article>)}</div>}</section></>}
     <section className="detail-section artifact-section"><div className="section-heading"><div><h2>Uploaded artifacts</h2><p>JSON files attached to this assessment</p></div></div><div className="artifact-list">{data.artifactNames.length ? data.artifactNames.map((file, i) => <div className="artifact-row" key={`${file}-${i}`}><FileJson size={16} /><span>{file}</span></div>) : <div className="empty-panel">No artifacts are attached.</div>}</div></section>
   </main>;
 }

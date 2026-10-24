@@ -12,6 +12,10 @@ public sealed class AssessmentDbContext(DbContextOptions<AssessmentDbContext> op
     public DbSet<Finding> Findings => Set<Finding>();
     public DbSet<Recommendation> Recommendations => Set<Recommendation>();
     public DbSet<ScoreCard> ScoreCards => Set<ScoreCard>();
+    public DbSet<AssessmentInsight> AssessmentInsights => Set<AssessmentInsight>();
+    public DbSet<AIRecommendation> AIRecommendations => Set<AIRecommendation>();
+    public DbSet<AIInsightRoadmapItem> AIInsightRoadmapItems => Set<AIInsightRoadmapItem>();
+    public DbSet<AIQuestion> AIQuestions => Set<AIQuestion>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -22,6 +26,16 @@ public sealed class AssessmentDbContext(DbContextOptions<AssessmentDbContext> op
         model.Entity<Assessment>().Property(a => a.Status).HasConversion<string>();
         model.Entity<Assessment>().HasMany(a => a.Artifacts).WithOne(x => x.Assessment).HasForeignKey(x => x.AssessmentId).OnDelete(DeleteBehavior.Cascade);
         model.Entity<Assessment>().HasOne(a => a.Result).WithOne(r => r.Assessment).HasForeignKey<AssessmentResult>(r => r.AssessmentId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<Assessment>().HasMany(a => a.Insights).WithOne(i => i.Assessment).HasForeignKey(i => i.AssessmentId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<Assessment>().HasMany(a => a.AIQuestions).WithOne(q => q.Assessment).HasForeignKey(q => q.AssessmentId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<AssessmentInsight>().Property(i => i.Status).HasConversion<string>();
+        model.Entity<AssessmentInsight>().Property(i => i.Confidence).HasConversion<string>();
+        model.Entity<AssessmentInsight>().HasMany(i => i.Recommendations).WithOne(r => r.Insight).HasForeignKey(r => r.InsightId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<AssessmentInsight>().HasMany(i => i.Roadmap).WithOne(r => r.Insight).HasForeignKey(r => r.InsightId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<AIInsightRoadmapItem>().Property(i => i.ActivityType).HasConversion<string>();
+        model.Entity<AIQuestion>().Property(q => q.Status).HasConversion<string>();
+        model.Entity<AssessmentInsight>().HasIndex(i => new { i.AssessmentId, i.CreatedDate });
+        model.Entity<AIQuestion>().HasIndex(q => new { q.AssessmentId, q.AskedAt });
         model.Entity<AssessmentResult>().HasMany(r => r.Findings).WithOne(f => f.AssessmentResult).HasForeignKey(f => f.AssessmentResultId).OnDelete(DeleteBehavior.Cascade);
         model.Entity<AssessmentResult>().HasMany(r => r.Recommendations).WithOne(x => x.AssessmentResult).HasForeignKey(x => x.AssessmentResultId).OnDelete(DeleteBehavior.Cascade);
         model.Entity<AssessmentResult>().HasMany(r => r.ScoreCards).WithOne(x => x.AssessmentResult).HasForeignKey(x => x.AssessmentResultId).OnDelete(DeleteBehavior.Cascade);
@@ -32,9 +46,22 @@ public sealed class AssessmentDbContext(DbContextOptions<AssessmentDbContext> op
 
 public sealed class EfAssessmentRepository(AssessmentDbContext db) : IAssessmentRepository
 {
-    private static IQueryable<Assessment> Full(IQueryable<Assessment> query) => query.Include(a => a.Artifacts).Include(a => a.Result)!.ThenInclude(r => r!.Findings).Include(a => a.Result)!.ThenInclude(r => r!.Recommendations).Include(a => a.Result)!.ThenInclude(r => r!.ScoreCards);
+    private static IQueryable<Assessment> Full(IQueryable<Assessment> query) => query
+        .Include(a => a.Artifacts)
+        .Include(a => a.Result)!.ThenInclude(r => r!.Findings)
+        .Include(a => a.Result)!.ThenInclude(r => r!.Recommendations)
+        .Include(a => a.Result)!.ThenInclude(r => r!.ScoreCards)
+        .Include(a => a.Insights)!.ThenInclude(i => i!.Recommendations)
+        .Include(a => a.Insights)!.ThenInclude(i => i!.Roadmap)
+        .Include(a => a.AIQuestions);
     public Task<Assessment?> FindAsync(Guid id, CancellationToken ct) => Full(db.Assessments).SingleOrDefaultAsync(a => a.Id == id, ct);
-    public async Task<IReadOnlyList<Assessment>> ListAsync(CancellationToken ct) => await Full(db.Assessments).OrderByDescending(a => a.CreatedDate).ToListAsync(ct);
+    public async Task<IReadOnlyList<Assessment>> ListAsync(CancellationToken ct)
+    {
+        // EF Core's SQLite provider cannot translate DateTimeOffset ordering. Keep
+        // date ordering in memory after the demo's assessment set has been loaded.
+        var assessments = await Full(db.Assessments).ToListAsync(ct);
+        return assessments.OrderByDescending(a => a.CreatedDate).ToArray();
+    }
     public Task AddAsync(Assessment item, CancellationToken ct) => db.Assessments.AddAsync(item, ct).AsTask();
     public Task SaveChangesAsync(CancellationToken ct) => db.SaveChangesAsync(ct);
 }
