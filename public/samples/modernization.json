@@ -1,0 +1,21 @@
+{
+  "applications": [
+    {
+      "name": "Customer Portal",
+      "framework": ".NET Framework 4.7.2",
+      "database": "SQL Server 2012",
+      "hosting": "IIS",
+      "containerized": false,
+      "architecture": "monolith"
+    },
+    {
+      "name": "Order API",
+      "framework": ".NET 8",
+      "supportedRuntime": true,
+      "database": "SQL Server 2019",
+      "hosting": "Container Apps",
+      "containerized": true,
+      "architecture": "service"
+    }
+  ]
+}

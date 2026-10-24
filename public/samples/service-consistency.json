@@ -1,0 +1,25 @@
+{
+  "services": [
+    {
+      "name": "Customer API",
+      "version": "v1",
+      "errorFormat": "error",
+      "authentication": "JWT",
+      "schemas": { "Customer": { "CustomerId": { "type": "string" } } }
+    },
+    {
+      "name": "Order API",
+      "version": "v2",
+      "errorFormat": "code-message",
+      "authentication": "OAuth",
+      "schemas": { "Order": { "customerID": { "type": "string" } } }
+    },
+    {
+      "name": "Billing API",
+      "version": "v2025",
+      "errorFormat": "code-message",
+      "authentication": "JWT",
+      "schemas": { "Invoice": { "cust_id": { "type": "string" } } }
+    }
+  ]
+}

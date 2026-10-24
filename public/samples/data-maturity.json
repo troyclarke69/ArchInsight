@@ -1,0 +1,12 @@
+{
+  "dataOwnersDefined": true,
+  "catalogAvailable": false,
+  "qualityMonitoring": false,
+  "pipelineMonitoring": false,
+  "warehouseAvailable": true,
+  "selfServiceAnalytics": true,
+  "consistentMetrics": false,
+  "structuredDatasets": false,
+  "featureManagement": false,
+  "vectorSearch": false
+}

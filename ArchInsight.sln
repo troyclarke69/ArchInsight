@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ArchInsight.Domain", "backend\ArchInsight.Domain\ArchInsight.Domain.csproj", "{032FA9DA-9659-438D-9E88-46BD61AAEA01}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ArchInsight.Application", "backend\ArchInsight.Application\ArchInsight.Application.csproj", "{032FA9DA-9659-438D-9E88-46BD61AAEA02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ArchInsight.Infrastructure", "backend\ArchInsight.Infrastructure\ArchInsight.Infrastructure.csproj", "{032FA9DA-9659-438D-9E88-46BD61AAEA03}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ArchInsight.Api", "backend\ArchInsight.Api\ArchInsight.Api.csproj", "{032FA9DA-9659-438D-9E88-46BD61AAEA04}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{032FA9DA-9659-438D-9E88-46BD61AAEA01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA03}.Release|Any CPU.Build.0 = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032FA9DA-9659-438D-9E88-46BD61AAEA04}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
