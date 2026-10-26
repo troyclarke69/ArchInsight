@@ -1,0 +1,14 @@
+name: CI and deployment
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: dotnet restore src/Orders.Api/Orders.Api.csproj
+      - run: dotnet build src/Orders.Api/Orders.Api.csproj --no-restore
+      - run: npm ci --prefix src/Portal
+      - run: npm run build --prefix src/Portal
+      - run: echo "deploy release artifact"

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ArchInsight.AI.Contracts;
 using ArchInsight.AI.Services;
+using ArchInsight.Agents.Contracts;
+using ArchInsight.Analysis;
 using ArchInsight.Application;
 using ArchInsight.Domain;
 
@@ -25,6 +27,7 @@ public sealed class AIInsightWorker(IServiceScopeFactory scopes, IAIInsightQueue
             await using var scope = scopes.CreateAsyncScope();
             var repository = scope.ServiceProvider.GetRequiredService<IAssessmentRepository>();
             var generator = scope.ServiceProvider.GetRequiredService<IAIInsightGenerator>();
+            var agents = scope.ServiceProvider.GetRequiredService<IEnumerable<IAgent>>();
             var assessment = await repository.FindAsync(assessmentId, stoppingToken);
             var insight = assessment?.Insights.Where(i => i.Status is AIInsightStatus.Pending or AIInsightStatus.Running).OrderByDescending(i => i.CreatedDate).FirstOrDefault();
             if (assessment is null || insight is null) continue;
@@ -32,15 +35,18 @@ public sealed class AIInsightWorker(IServiceScopeFactory scopes, IAIInsightQueue
             {
                 insight.Status = AIInsightStatus.NotConfigured;
                 insight.ErrorMessage = "Configure Azure OpenAI or OpenAI credentials to generate insights.";
+                UpdateAgentStages(assessment!, insight, null, null);
                 await repository.SaveChangesAsync(stoppingToken);
                 continue;
             }
+            AgentResult? aiInsightAgentResult = null;
             try
             {
                 insight.Status = AIInsightStatus.Running;
                 insight.ErrorMessage = null;
                 await repository.SaveChangesAsync(stoppingToken);
-                var generated = await generator.GenerateInsightAsync(assessment, stoppingToken);
+                var (agentResult, generated) = await RunAIInsightAgentAsync(assessment, agents, stoppingToken);
+                aiInsightAgentResult = agentResult;
                 insight.ExecutiveSummary = generated.ExecutiveSummary;
                 insight.CurrentState = generated.CurrentState;
                 insight.KeyRisksJson = JsonSerializer.Serialize(generated.KeyRisks);
@@ -69,7 +75,50 @@ public sealed class AIInsightWorker(IServiceScopeFactory scopes, IAIInsightQueue
                 insight.ErrorMessage = ex.Message;
                 logger.LogWarning(ex, "AI insight generation failed for assessment {AssessmentId}", assessmentId);
             }
+            AgentResult? executiveAdvisorResult = null;
+            string? executiveAdvisorError = null;
+            try { executiveAdvisorResult = await RunExecutiveAdvisorAsync(assessment, insight, agents, stoppingToken); }
+            catch (Exception ex) { executiveAdvisorError = ex.Message; logger.LogWarning(ex, "Executive advisor stage failed for repository analysis {RepositoryAnalysisId}", assessment.RepositoryAnalysisId); }
+            UpdateAgentStages(assessment, insight, aiInsightAgentResult, executiveAdvisorResult, executiveAdvisorError);
             await repository.SaveChangesAsync(stoppingToken);
+        }
+    }
+
+    private async Task<(AgentResult Result, GeneratedInsight Insight)> RunAIInsightAgentAsync(Assessment assessment, IEnumerable<IAgent> agents, CancellationToken ct)
+    {
+        var aiAgent = agents.FirstOrDefault(a => a.Name == "AIInsightAgent") ?? throw new InvalidOperationException("The AI insight agent is not registered.");
+        var emptyInventory = new RepositoryInventory(assessment.Name, "", [], [], [], [], [], [], 0, []);
+        var inventory = assessment.RepositoryAnalysis is null ? emptyInventory : JsonSerializer.Deserialize<RepositoryInventory>(assessment.RepositoryAnalysis.SummaryJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true }) ?? emptyInventory;
+        var result = await aiAgent.ExecuteAsync(new AgentContext(inventory, assessment), ct);
+        var generated = JsonSerializer.Deserialize<GeneratedInsight>(result.OutputJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("The AI insight agent returned an empty result.");
+        return (result, generated);
+    }
+
+    private async Task<AgentResult?> RunExecutiveAdvisorAsync(Assessment assessment, AssessmentInsight insight, IEnumerable<IAgent> agents, CancellationToken ct)
+    {
+        if (insight.Status != AIInsightStatus.Completed || assessment.RepositoryAnalysis is null) return null;
+        var inventory = JsonSerializer.Deserialize<RepositoryInventory>(assessment.RepositoryAnalysis.SummaryJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+        var advisor = agents.FirstOrDefault(a => a.Name == "ExecutiveAdvisorAgent");
+        if (inventory is null || advisor is null) return null;
+        return await advisor.ExecuteAsync(new AgentContext(inventory, assessment, insight), ct);
+    }
+
+    private static void UpdateAgentStages(Assessment assessment, AssessmentInsight insight, AgentResult? aiInsightAgentResult, AgentResult? executiveAdvisorResult, string? executiveAdvisorError = null)
+    {
+        var repository = assessment.RepositoryAnalysis;
+        if (repository is null) return;
+        var ai = repository.AgentStages.FirstOrDefault(s => s.AgentName == "AIInsightAgent");
+        var executive = repository.AgentStages.FirstOrDefault(s => s.AgentName == "ExecutiveAdvisorAgent");
+        if (ai is not null)
+        {
+            ai.Status = insight.Status.ToString(); ai.CompletedAt = DateTimeOffset.UtcNow;
+            ai.OutputJson = aiInsightAgentResult?.OutputJson ?? JsonSerializer.Serialize(new { insight.Status, insight.ModelName, insight.PromptVersion, insight.TokenUsage, insight.ErrorMessage, insight.ExecutiveSummary, insight.BusinessImpact, insight.RiskNarrative });
+        }
+        if (executive is not null)
+        {
+            executive.Status = executiveAdvisorError is not null ? "Failed" : insight.Status is AIInsightStatus.Completed ? "Completed" : insight.Status.ToString();
+            executive.CompletedAt = DateTimeOffset.UtcNow;
+            executive.OutputJson = executiveAdvisorResult?.OutputJson ?? JsonSerializer.Serialize(new { status = executive.Status, reason = executiveAdvisorError ?? insight.ErrorMessage });
         }
     }
 

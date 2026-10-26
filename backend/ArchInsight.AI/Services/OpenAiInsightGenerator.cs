@@ -56,7 +56,16 @@ public sealed class OpenAiInsightGenerator(HttpClient http, AIProviderOptions op
         confidence = confidence.ToString(),
         scorecards = assessment.Result.ScoreCards.Select(s => new { s.Dimension, s.Score }),
         findings = assessment.Result.Findings.Select(f => new { severity = f.Severity.ToString(), f.Title, f.Description, f.Category, deterministicAction = f.RecommendationText }),
-        deterministicRecommendations = assessment.Result.Recommendations.OrderBy(r => r.Priority).Select(r => new { r.Priority, r.Title, r.Description, r.Timeframe })
+        deterministicRecommendations = assessment.Result.Recommendations.OrderBy(r => r.Priority).Select(r => new { r.Priority, r.Title, r.Description, r.Timeframe }),
+        repository = assessment.RepositoryAnalysis is null ? null : new
+        {
+            name = assessment.RepositoryAnalysis.Name,
+            applications = assessment.RepositoryAnalysis.Applications.Take(100).Select(a => new { a.Name, a.Ecosystem, a.Runtime, frameworks = JsonSerializer.Deserialize<string[]>(a.FrameworksJson, JsonOptions), a.Database, a.Hosting, a.Containerized, a.BusinessImpact, a.TechnicalRisk }),
+            services = assessment.RepositoryAnalysis.Services.Take(100).Select(s => new { s.Name, s.Version, s.EndpointCount, schemas = JsonSerializer.Deserialize<string[]>(s.SchemasJson, JsonOptions), authentication = JsonSerializer.Deserialize<string[]>(s.AuthenticationJson, JsonOptions) }),
+            dependencies = assessment.RepositoryAnalysis.Dependencies.Take(300).Select(d => new { d.Name, d.Version, d.Type, d.Ecosystem, d.RiskLevel, d.RiskReason }),
+            technologyInventory = assessment.RepositoryAnalysis.SoftwareInventory.Take(300).Select(i => new { i.Category, i.Name, i.Version }),
+            agentStages = assessment.RepositoryAnalysis.AgentStages.OrderBy(s => s.Sequence).Select(s => new { s.AgentName, s.Status })
+        }
     };
 
     private async Task<(string Content, string Model, int Tokens)> CompleteAsync(string system, string user, CancellationToken ct)

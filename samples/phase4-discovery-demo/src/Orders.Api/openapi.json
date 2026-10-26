@@ -1,0 +1,13 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Orders Service", "version": "v1" },
+  "paths": {
+    "/api/orders": { "get": { "summary": "List orders", "responses": { "200": { "description": "Order list" } } }, "post": { "summary": "Create order", "responses": { "201": { "description": "Created" } } } },
+    "/api/orders/{id}": { "get": { "summary": "Get order", "responses": { "200": { "description": "Order" } } }, "delete": { "summary": "Cancel order", "responses": { "204": { "description": "Cancelled" } } } }
+  },
+  "components": {
+    "schemas": { "Order": { "type": "object" }, "OrderLine": { "type": "object" } },
+    "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+  },
+  "security": [{ "bearerAuth": [] }]
+}

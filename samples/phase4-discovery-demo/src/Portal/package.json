@@ -1,0 +1,7 @@
+{
+  "name": "archinsight-demo-portal",
+  "version": "1.4.0",
+  "engines": { "node": ">=20 <23" },
+  "dependencies": { "next": "14.2.5", "react": "^18.3.1", "axios": "^1.7.2" },
+  "devDependencies": { "typescript": "^5.5.3", "eslint": "^8.57.0" }
+}

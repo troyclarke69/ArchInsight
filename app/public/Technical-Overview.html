@@ -1,0 +1,364 @@
+<h1 id="sample-markdown">Sample Markdown</h1>
+<p>This is some basic, sample markdown.</p>
+<h2 id="second-heading-archinsight-ai-technical-overview">Second Heading# ArchInsight AI — Technical Overview</h2>
+<p><strong>Document status:</strong> describes the repository as implemented on 2026-10-24.<br><strong>Product phase:</strong> Phase 3 AI insights and assessment workflow.<br><strong>Audience:</strong> engineers preparing Phase 4, maintainers, and technical reviewers.</p>
+<h2 id="1-scope-and-current-behavior">1. Scope and current behavior</h2>
+<p>ArchInsight is a web application for creating and reviewing three rule-based assessment types:</p>
+<ul>
+<li>Modernization</li>
+<li>Data maturity</li>
+<li>Service consistency</li>
+</ul>
+<p>The current product supports assessment creation, JSON artifact upload, asynchronous rule execution, persisted deterministic results, optional AI-generated insights and Q&amp;A, historical score trends, assessment comparison, a live-data dashboard, and assessment details. Dashboard values are populated from the API and persisted assessment records.</p>
+<p>AI is an optional advisory layer. Deterministic scores, findings, and rule-based recommendations are persisted separately and remain authoritative. Phase 3 does not include agent orchestration, vector search, report export, user authentication, or organization/workspace authorization.</p>
+<h2 id="2-architecture">2. Architecture</h2>
+<pre><code class="lang-mermaid">flowchart LR
+    B<span class="hljs-function"><span class="hljs-title">rowser</span>[Next.js dashboard <span class="hljs-built_in">and</span> details] --&gt;</span>|HTTP JSON + multipart| Api[ASP.NET Core Minimal API]
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> App[Application layer: MediatR, validation, contracts]
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> AI[ArchInsight.AI: prompts <span class="hljs-built_in">and</span> provider adapter]
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> Infra[Infrastructure: EF Core, file storage, queue]
+    A<span class="hljs-function"><span class="hljs-title">pp</span> --&gt;</span> Domain[Domain entities <span class="hljs-built_in">and</span> enums]
+    I<span class="hljs-function"><span class="hljs-title">nfra</span> --&gt;</span> Domain
+    I<span class="hljs-function"><span class="hljs-title">nfra</span> --&gt;</span> Db[(SQLite <span class="hljs-built_in">in</span> Development&lt;br/&gt;SQL Server otherwise)]
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> Queue[In-memory Channel&lt;Guid&gt;]
+    Q<span class="hljs-function"><span class="hljs-title">ueue</span> --&gt;</span> Worker[Hosted assessment worker]
+    W<span class="hljs-function"><span class="hljs-title">orker</span> --&gt;</span> Engine[Deterministic AssessmentEngine]
+    E<span class="hljs-function"><span class="hljs-title">ngine</span> --&gt;</span> App
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> AIQueue[In-memory AI insight queue]
+    AIQ<span class="hljs-function"><span class="hljs-title">ueue</span> --&gt;</span> AIWorker[Hosted AI insight worker]
+    AIW<span class="hljs-function"><span class="hljs-title">orker</span> --&gt;</span> AI
+    AI --&gt;|structured deterministic facts only| Provider[Azure OpenAI preferred / OpenAI fallback]
+    A<span class="hljs-function"><span class="hljs-title">pi</span> --&gt;</span> Files[(uploads/{assessmentId}<span class="hljs-comment">/*.json)]</span>
+</code></pre>
+<p>The solution is split into four .NET projects:</p>
+<table>
+<thead>
+<tr>
+<th>Project</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backend/ArchInsight.Domain</code></td>
+<td>Entities and enums with no infrastructure dependency</td>
+</tr>
+<tr>
+<td><code>backend/ArchInsight.Application</code></td>
+<td>Assessment contracts, MediatR commands/handlers, validation, mapping, and scoring engines</td>
+</tr>
+<tr>
+<td><code>backend/ArchInsight.Infrastructure</code></td>
+<td>EF Core context/repository and local JSON file storage</td>
+</tr>
+<tr>
+<td><code>backend/ArchInsight.Api</code></td>
+<td>HTTP routes, dependency configuration, database initialization, seed data, and background worker</td>
+</tr>
+<tr>
+<td><code>backend/ArchInsight.AI</code></td>
+<td>AI provider adapter, prompt contracts/versioning, structured output models, and local evidence-confidence classifier</td>
+</tr>
+</tbody>
+</table>
+<p>The frontend is a Next.js 15 App Router application in <code>app/</code>, written in TypeScript and styled with project CSS. It does not currently use Tailwind or shadcn/ui. The SQL Server reference DDL is in <code>database/sql/001-create-schema.sql</code>.</p>
+<h2 id="3-technology-and-configuration">3. Technology and configuration</h2>
+<ul>
+<li>.NET 9 / ASP.NET Core Minimal APIs</li>
+<li>EF Core 9.0.10 with SQL Server and SQLite providers</li>
+<li>MediatR 12.4.1</li>
+<li>FluentValidation 11.11.0</li>
+<li>Next.js 15.5.6, React 19.1.1, TypeScript</li>
+<li>Local JSON files for artifact bytes; relational database for assessment records and parsed JSON metadata</li>
+<li><code>HttpClient</code>-based Azure OpenAI/OpenAI Chat Completions adapter with JSON mode; no provider SDK dependency</li>
+</ul>
+<p>Database selection is controlled by <code>Database:Provider</code>:</p>
+<ul>
+<li><code>Development</code> launch profile sets <code>ASPNETCORE_ENVIRONMENT=Development</code>; <code>appsettings.Development.json</code> selects SQLite. The database file is <code>backend/ArchInsight.Api/archinsight.db</code> when run with the project launch profile.</li>
+<li>The base <code>appsettings.json</code> selects SQL Server. Configure <code>ConnectionStrings:SqlServer</code> for the intended SQL Server instance before using that configuration.</li>
+<li>The API bootstraps with EF Core <code>EnsureCreated</code> and then runs <code>Phase3SchemaUpgrade</code> to add Phase 3 tables to an existing SQLite or SQL Server database. It does not apply EF migrations. <code>database/sql/002-phase3-ai-insights.sql</code> is the standalone SQL Server additive schema script.</li>
+<li><code>Cors:Origins</code> defaults to localhost ports 3000 and 3001. Configure origins for other frontend hosts.</li>
+<li>The frontend reads <code>NEXT_PUBLIC_API_BASE_URL</code>; if unset, it uses <code>http://localhost:5080</code>.</li>
+<li>Provider configuration is read from <code>AI:AzureOpenAI:ChatCompletionsUrl</code>, <code>AI:AzureOpenAI:ApiKey</code>, <code>AI:AzureOpenAI:Deployment</code>, <code>AI:OpenAI:ApiKey</code>, and <code>AI:OpenAI:Model</code>. Use environment variables with double underscores or .NET user secrets for credentials. Azure is selected when its full Chat Completions URL, key, and deployment are all configured; otherwise OpenAI is selected when key and model are configured. If neither is configured, deterministic assessments remain fully usable while AI features report not configured.</li>
+</ul>
+<h2 id="4-domain-and-persistence-model">4. Domain and persistence model</h2>
+<p>The primary entities and relationships are:</p>
+<pre><code class="lang-text">Assessment <span class="hljs-number">1</span> ─── * AssessmentArtifact
+Assessment <span class="hljs-number">1</span> ─── <span class="hljs-number">0.</span><span class="hljs-number">.1</span> AssessmentResult
+AssessmentResult <span class="hljs-number">1</span> ─── * Finding
+AssessmentResult <span class="hljs-number">1</span> ─── * Recommendation
+AssessmentResult <span class="hljs-number">1</span> ─── * ScoreCard
+Assessment <span class="hljs-number">1</span> ─── * AssessmentInsight
+AssessmentInsight <span class="hljs-number">1</span> ─── * AIRecommendation
+AssessmentInsight <span class="hljs-number">1</span> ─── * AIInsightRoadmapItem
+Assessment <span class="hljs-number">1</span> ─── * AIQuestion
+</code></pre>
+<h3 id="assessment">Assessment</h3>
+<p>Stores <code>Id</code>, <code>Name</code>, <code>OrganizationName</code>, <code>AssessmentType</code>, <code>CreatedDate</code>, <code>Status</code>, and an optional <code>ErrorMessage</code>. Status values are <code>Pending</code>, <code>Running</code>, <code>Completed</code>, and <code>Failed</code>. Assessment types are <code>Modernization</code>, <code>DataMaturity</code>, and <code>ServiceConsistency</code>.</p>
+<h3 id="assessmentartifact">AssessmentArtifact</h3>
+<p>Stores an artifact ID, parent assessment ID, <code>ArtifactType</code>, original filename, relative disk path, parsed/minified JSON in <code>MetadataJson</code>, and upload timestamp. The original JSON bytes are saved under the API content root at <code>uploads/{assessmentId}/{generatedId}.json</code>.</p>
+<h3 id="assessmentresult-and-children">AssessmentResult and children</h3>
+<p><code>AssessmentResult</code> stores the aggregate score, type-specific recommendation label, deterministic executive summary, count of systems/services where applicable, and completion timestamp. <code>Finding</code> stores title, description, category, severity, and a suggested action. <code>Recommendation</code> stores priority, title, description, and timeframe. <code>ScoreCard</code> stores a named dimension and a 0–100 score.</p>
+<p>Enums are persisted as strings. Relationships cascade from assessment to its artifacts/result and from result to its findings, recommendations, and scorecards.</p>
+<p><code>AssessmentInsight</code> stores AI-generated narrative fields, confidence, status, provider model, prompt version, token count, and timestamps. Its recommendations and roadmap are child records. <code>AIQuestion</code> stores each submitted question and answer with provider metadata and status. Insight generations are append-only: regeneration creates a new insight row and the detail API returns the newest first. The provider never receives uploaded JSON or raw artifact metadata; it receives a compact payload derived from the persisted deterministic result. The evidence-confidence classifier runs locally from evidence coverage and is not a model self-rating.</p>
+<h2 id="5-assessment-lifecycle">5. Assessment lifecycle</h2>
+<pre><code class="lang-mermaid">sequenceDiagram
+    actor User
+    participant UI as Next.js
+    participant API as Minimal API
+    participant DB as EF Core database
+    participant Q as Channel&lt;Guid&gt;
+    participant W as Background worker
+
+    User-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">UI:</span> Select type, name, organization, JSON files
+    UI-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">API:</span> POST /api/assessments
+    API-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">DB:</span> Save Pending assessment
+    UI-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">API:</span> POST /api/artifacts (once per file)
+    API-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">API:</span> Validate JSON and write file
+    API-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">DB:</span> Save artifact metadata and JSON
+    UI-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">API:</span> POST /api/assessments/{id}/run
+    API-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">DB:</span> Mark Running
+    API-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">Q:</span> Enqueue assessment ID
+    W-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">DB:</span> Load assessment and artifacts
+    W-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">W:</span> Run deterministic engine
+    W-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">DB:</span> Save result, findings, recommendations, scorecards, status
+    UI-<span class="hljs-meta">&gt;&gt;</span><span class="hljs-symbol">API:</span> Refresh GETs while status is Pending/Running
+</code></pre>
+<p>The queue is an unbounded in-process <code>Channel&lt;Guid&gt;</code> and the worker processes one assessment at a time. On startup, the API re-enqueues assessments already marked <code>Pending</code> or <code>Running</code>, so persisted work can be retried after a process restart. The frontend polls every 1.8 seconds while any listed assessment is pending or running; the detail page also polls while its selected assessment is running.</p>
+<p>If the engine throws, the worker marks the assessment <code>Failed</code> and persists the exception message in <code>ErrorMessage</code>. A failed assessment can be queued again. Completed and currently running assessments cannot be queued again through the run endpoint.</p>
+<h2 id="6-artifact-formats-and-ingestion">6. Artifact formats and ingestion</h2>
+<p>Only <code>.json</code> files are accepted. The API enforces a non-empty file size up to 2 MiB and parses JSON before storage. The browser also checks the extension, size, and JSON syntax before creating an assessment. The API persists the raw file on disk and the normalized JSON representation in the database; the engine reads the database metadata JSON.</p>
+<p>The included examples are downloadable in the assessment dialog and live in <code>public/samples/</code>:</p>
+<ul>
+<li><code>modernization.json</code>: an <code>applications</code> array. Each application may contain <code>name</code>, <code>framework</code>, <code>database</code>, <code>hosting</code>, <code>containerized</code>, <code>architecture</code>, and <code>supportedRuntime</code>.</li>
+<li><code>data-maturity.json</code>: boolean capabilities such as <code>dataOwnersDefined</code>, <code>catalogAvailable</code>, <code>qualityMonitoring</code>, <code>pipelineMonitoring</code>, <code>warehouseAvailable</code>, <code>selfServiceAnalytics</code>, <code>consistentMetrics</code>, <code>structuredDatasets</code>, <code>featureManagement</code>, and <code>vectorSearch</code>.</li>
+<li><code>service-consistency.json</code>: a <code>services</code> array with service name, version, authentication/error format, and schema fields. Raw OpenAPI objects with <code>info.title</code> and paths are also recognized.</li>
+</ul>
+<p>The <code>ArtifactType</code> enum includes architecture documents, technology/database inventories, OpenAPI specifications, service manifests, source code summaries, and data platform inventories. The current browser assigns a type based on the assessment type; the engine primarily interprets JSON contents rather than branching on the artifact type.</p>
+<h2 id="7-deterministic-scoring-rules">7. Deterministic scoring rules</h2>
+<p>All rules in <code>AssessmentEngine</code> are applied once per assessment condition: if any recognized application/service triggers a condition, that condition contributes one penalty/finding, regardless of how many records match. Scores are clamped to 0–100. This is a baseline policy implementation, not a calibrated architecture benchmark.</p>
+<h3 id="7-1-modernization">7.1 Modernization</h3>
+<p>The engine recursively finds objects with at least one of <code>framework</code>, <code>database</code>, <code>hosting</code>, <code>containerized</code>, or <code>architecture</code>. It starts at 100 and applies:</p>
+<table>
+<thead>
+<tr>
+<th>Condition found in any application</th>
+<th style="text-align:right">Score change</th>
+<th>Severity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.NET Framework</code> version parses below 4.8 (or version text is unparseable after matching <code>.NET Framework</code>)</td>
+<td style="text-align:right">−20</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Database string contains <code>SQL Server 2012</code></td>
+<td style="text-align:right">−15</td>
+<td>Critical</td>
+</tr>
+<tr>
+<td>Hosting string contains <code>IIS</code></td>
+<td style="text-align:right">−10</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><code>containerized</code> is false or absent</td>
+<td style="text-align:right">−15</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>Architecture string contains <code>monolith</code></td>
+<td style="text-align:right">−20</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Any application explicitly sets <code>supportedRuntime: true</code></td>
+<td style="text-align:right">+10</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The recommendation uses the final score: 0–39 <code>Rewrite</code>, 40–59 <code>Refactor</code>, 60–79 <code>Replatform</code>, and 80–100 <code>Lift-and-Shift</code>. Four roadmap recommendations are generated for every valid modernization assessment, regardless of findings: framework upgrade (0–3 months), containerization (3–6 months), data layer modernization (6–12 months), and cloud migration (12+ months).</p>
+<h3 id="7-2-data-maturity">7.2 Data maturity</h3>
+<p>The engine selects the first recursively encountered JSON object with a recognized data capability field. Each dimension is calculated as the number of true signals divided by the number of signals assigned to that dimension, multiplied by 100 and rounded down to an integer:</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Input signals</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Governance</td>
+<td><code>dataOwnersDefined</code>, <code>catalogAvailable</code></td>
+</tr>
+<tr>
+<td>Quality</td>
+<td><code>qualityMonitoring</code></td>
+</tr>
+<tr>
+<td>Platform</td>
+<td><code>warehouseAvailable</code></td>
+</tr>
+<tr>
+<td>Observability</td>
+<td><code>pipelineMonitoring</code></td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td><code>selfServiceAnalytics</code>, <code>consistentMetrics</code></td>
+</tr>
+<tr>
+<td>AI Readiness</td>
+<td><code>structuredDatasets</code>, <code>featureManagement</code>, <code>vectorSearch</code></td>
+</tr>
+</tbody>
+</table>
+<p>False or missing signals score zero. The overall score is the arithmetic mean of the six dimension scores, rounded to the nearest integer with midpoint values rounded away from zero. Each dimension is persisted as a separate scorecard.</p>
+<p>Missing-evidence findings are currently generated for owners, catalog, quality monitoring, pipeline monitoring, warehouse, self-service analytics, and structured datasets. Although metrics and feature-management/vector-search fields affect scores, missing values for those three fields do not currently generate individual findings. Recommendations are generated from the first four missing-evidence findings. The inventory is treated as one data platform assessment, not as a count of applications.</p>
+<h3 id="7-3-service-consistency">7.3 Service consistency</h3>
+<p>The engine recognizes service objects with a <code>name</code> or <code>info.title</code> and at least one service/OpenAPI field (<code>paths</code>, <code>openapi</code>, <code>authentication</code>, <code>auth</code>, or <code>schemas</code>). It requires at least two recognized services.</p>
+<p>It generates at most one finding for each cross-service check:</p>
+<ul>
+<li><strong>Naming:</strong> detects more than one exact spelling among <code>CustomerId</code>, <code>customerID</code>, and <code>cust_id</code> in nested schema properties with <code>type</code> or <code>$ref</code>.</li>
+<li><strong>Versioning:</strong> compares <code>apiVersion</code>, <code>info.version</code>, or <code>version</code>; it also searches string values for a <code>v&lt;number&gt;</code> path segment. Plain dotted numeric versions are reduced to their first number with a <code>v</code> prefix.</li>
+<li><strong>Error formats:</strong> uses explicit <code>errorFormat</code>, otherwise searches descendant property names for <code>error</code> or the pair <code>code</code> and <code>message</code>. Other cases become <code>unknown</code>.</li>
+<li><strong>Authentication:</strong> uses <code>authentication</code> or <code>auth</code>, otherwise derives a value from OpenAPI <code>components.securitySchemes</code>. OAuth2 maps to <code>OAuth</code>; a bearer scheme maps to <code>JWT</code>; absent schemes map to <code>None</code>.</li>
+</ul>
+<p>Different naming/version signals create Medium findings; different error formats and authentication approaches create High findings. Each Medium finding deducts 12 points; each High finding deducts 20 points. The scorecard includes API design, error handling, authentication, and data contracts. Service roadmap recommendations are generated from findings, with the first two in 0–3 months and later items in 3–6 months.</p>
+<p>These are lightweight structural heuristics. The engine does not yet validate all OpenAPI semantics, HTTP routes, response codes, authorization policy, telemetry, schema compatibility, package/framework drift, or breaking changes.</p>
+<h2 id="8-http-api">8. HTTP API</h2>
+<p>The API uses JSON string values for enums. Local base URL is <code>http://localhost:5080</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Method and route</th>
+<th>Purpose</th>
+<th>Typical responses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /health</code></td>
+<td>Liveness endpoint</td>
+<td><code>200</code></td>
+</tr>
+<tr>
+<td><code>GET /api/assessments</code></td>
+<td>List assessment summaries, newest first</td>
+<td><code>200</code></td>
+</tr>
+<tr>
+<td><code>GET /api/assessments/{id}</code></td>
+<td>Fetch assessment, artifacts, scorecards, findings, and recommendations</td>
+<td><code>200</code>, <code>404</code></td>
+</tr>
+<tr>
+<td><code>POST /api/assessments</code></td>
+<td>Create an assessment</td>
+<td><code>201</code>, <code>400</code> validation problem</td>
+</tr>
+<tr>
+<td><code>POST /api/artifacts?assessmentId={guid}&amp;type={ArtifactType}</code></td>
+<td>Multipart upload with form field <code>file</code></td>
+<td><code>201</code>, <code>400</code>, <code>404</code>, <code>409</code></td>
+</tr>
+<tr>
+<td><code>POST /api/assessments/{id}/run</code></td>
+<td>Queue processing</td>
+<td><code>202</code>, <code>400</code>, <code>409</code></td>
+</tr>
+<tr>
+<td><code>POST /api/assessments/{id}/insights/regenerate</code></td>
+<td>Queue manual insight regeneration</td>
+<td><code>202</code>, <code>404</code>, <code>409</code>, <code>503</code></td>
+</tr>
+<tr>
+<td><code>POST /api/assessments/{id}/ask</code></td>
+<td>Answer and persist an assessment question</td>
+<td><code>201</code>, <code>400</code>, <code>404</code>, <code>409</code>, <code>502</code>, <code>503</code></td>
+</tr>
+<tr>
+<td><code>GET /api/assessments/compare?id={baseline}&amp;id={comparison}</code></td>
+<td>Compare two completed assessments of the same type; add an AI explanation when configured</td>
+<td><code>200</code>, <code>400</code>, <code>404</code></td>
+</tr>
+</tbody>
+</table>
+<p>Create request:</p>
+<pre><code class="lang-json">{
+  <span class="hljs-attr">"name"</span>: <span class="hljs-string">"Customer platform review"</span>,
+  <span class="hljs-attr">"organizationName"</span>: <span class="hljs-string">"Northstar Group"</span>,
+  <span class="hljs-attr">"assessmentType"</span>: <span class="hljs-string">"Modernization"</span>
+}
+</code></pre>
+<p>An assessment must exist and remain <code>Pending</code> to accept artifacts. <code>type</code> must be an <code>ArtifactType</code> enum value. An upload must be valid JSON, have a <code>.json</code> extension, and be no larger than 2 MiB. The run endpoint requires at least one uploaded artifact.</p>
+<p>The list endpoint returns summary fields: ID, name, organization, type, status, creation date, score, recommendation, and finding count. The detail endpoint adds completion date, executive summary, system count, error message, scorecards, complete finding/recommendation DTOs, artifact filenames, all insight generations with their child recommendations/roadmap, and saved Q&amp;A history. The compare route requires exactly two repeated <code>id</code> parameters and rejects different assessment types or incomplete assessments. Its score, finding, score-area, and severity changes are deterministic; the optional AI explanation is additive.</p>
+<p>Insight regeneration requires an enabled provider and a completed deterministic assessment. Automatic generation queues once after assessment completion and once during startup only for completed assessments that have no prior completed or in-flight insight. Dashboard reads do not trigger provider calls. Questions are stored before the provider call; an unconfigured provider produces a persisted <code>NotConfigured</code> question and a <code>503</code> response. AI failures do not change deterministic assessment status.</p>
+<h2 id="9-frontend-behavior">9. Frontend behavior</h2>
+<p><code>app/page.tsx</code> is the overview dashboard. It fetches the assessment list and then the latest listed assessment for each type. Score tiles, finding counts, assessment status, recent runs, and deterministic recommendations are built from those API responses. AI insight summaries, confidence, model/token provenance, and manual regeneration controls use persisted insight records. Trend cards use up to the latest eight completed assessments of each type. Comparison makes an explicit API request only after the user selects and compares two records. The findings and recommendations panels aggregate the latest detail for each assessment type rather than every historical run.</p>
+<p>The assessment dialog accepts one assessment type per assessment, a name and organization, and one or more JSON files. It creates the assessment, uploads files sequentially, and queues the run. The detail route <code>app/assessments/[id]/page.tsx</code> renders deterministic results separately from AI insights, the AI recommendations and roadmap, confidence/provenance, saved question-and-answer history, and artifact filenames. It polls while either deterministic execution or insight generation is pending. The shell still uses demo labels (Northstar Group, Jordan/admin); the organization field defaults to Northstar Group but is editable.</p>
+<p>If the API is unreachable, the overview displays an API warning and disables assessment submission. If upload fails after assessment creation, the assessment record remains pending (and may contain earlier successful uploads); the current interface does not offer a resume-upload flow from that error state.</p>
+<h2 id="10-seed-data">10. Seed data</h2>
+<p>At API startup, <code>EnsureCreated</code> runs and the seeder checks whether any assessment exists. If the database is empty, it creates one completed assessment for each type under Northstar Group and runs the same deterministic engine used for user-created assessments. The modernization seed contains Customer Portal, Order API, Billing Service, and Reporting Portal records with intentionally poor characteristics. The other seed records intentionally omit data capabilities and vary service naming/version/error/authentication fields.</p>
+<p>If any assessment already exists, seeding is skipped entirely. The seed artifact JSON is stored in database metadata; seed files are not written to the uploads folder.</p>
+<h2 id="11-local-development">11. Local development</h2>
+<p>From the repository root, start the API:</p>
+<pre><code class="lang-powershell">dotnet <span class="hljs-built_in">run</span> <span class="hljs-comment">--project backend/ArchInsight.Api</span>
+</code></pre>
+<p>The launch profile selects Development and binds to <code>http://localhost:5080</code>. In a second terminal:</p>
+<pre><code class="lang-powershell"><span class="hljs-built_in">npm</span> install
+<span class="hljs-built_in">npm</span> run dev
+</code></pre>
+<p>The frontend is available at <code>http://localhost:3000</code>. Example JSON can be downloaded from the assessment form. To build the backend solution and production frontend:</p>
+<pre><code class="lang-powershell"><span class="hljs-selector-tag">dotnet</span> <span class="hljs-selector-tag">build</span> <span class="hljs-selector-tag">ArchInsight</span><span class="hljs-selector-class">.sln</span> <span class="hljs-selector-tag">-m</span><span class="hljs-selector-pseudo">:1</span>
+<span class="hljs-selector-tag">npm</span> <span class="hljs-selector-tag">run</span> <span class="hljs-selector-tag">build</span>
+</code></pre>
+<h2 id="12-ai-insight-and-comparison-workflow">12. AI insight and comparison workflow</h2>
+<p>The API hosts two independent in-memory queues and workers. <code>AssessmentWorker</code> runs the deterministic engine, persists <code>AssessmentResult</code>, marks the assessment completed, then creates one pending insight record and queues it. <code>AIInsightWorker</code> loads the assessment with its deterministic result, transitions the insight through <code>Running</code>, calls <code>IAIInsightGenerator</code>, and persists the narrative, five AI recommendations, four roadmap entries, model/prompt metadata, token usage, confidence, and completion time. Provider failures are saved on the insight and do not alter deterministic status. Persisted pending/running work is requeued on startup. These channels are process-local and do not coordinate multiple API instances.</p>
+<p><code>OpenAiInsightGenerator</code> implements the provider boundary in <code>ArchInsight.AI</code>. Azure OpenAI is selected only when a full Chat Completions URL, API key, and deployment are supplied; otherwise a configured OpenAI key and model select OpenAI. Provider requests use the Chat Completions JSON response mode. <code>InsightPrompts</code> versions the prompt as <code>phase3-v1</code>. Deterministic scores, findings, scorecards, and rule-based recommendations are assembled into the provider payload. Uploaded artifact bytes and <code>MetadataJson</code> are not sent. The model&#39;s strategy recommendation is not allowed to overwrite the deterministic recommendation; persisted <code>RecommendedStrategy</code> reflects that deterministic strategy label. Confidence is classified locally from presence/coverage signals.</p>
+<p><code>GET /api/assessments/compare</code> uses a deterministic service to compare two completed assessments of the same type. It reports score movement, finding changes, dimension/category movement, and severity counts. If a provider is configured, the API also requests an optional explanation; provider failure leaves the deterministic comparison available with an error field. Q&amp;A is synchronous in the request path, persists its pending/running/completed/failed state and provider usage, and includes only the structured assessment facts and latest completed insight in its provider context.</p>
+<p>The dashboard shows one latest insight per assessment type, historical trends from up to eight completed runs, and a comparison selector. The detail page shows all generated insight dimensions and a separate AI recommendation/roadmap section. Manual regeneration is explicit; dashboard reads do not call the AI provider. AI features are optional and require configuration.</p>
+<h2 id="13-current-limitations-and-phase-4-seams">13. Current limitations and Phase 4 seams</h2>
+<p>Current implementation limits to account for before building on it:</p>
+<ul>
+<li>The queue is in-memory and unbounded; startup recovery retries persisted <code>Running</code>/<code>Pending</code> records, but there is no distributed queue, concurrency policy, retry/backoff policy, or cancellation endpoint.</li>
+<li><code>GET /api/assessments</code> loads assessments and their result graphs before sorting in application memory. This avoids SQLite&#39;s unsupported <code>DateTimeOffset</code> ordering translation and is suitable only for small demo datasets.</li>
+<li>Database initialization uses <code>EnsureCreated</code> plus a focused additive Phase 3 schema upgrade, not versioned EF migrations. Review the startup SQL and standalone SQL Server script against the EF model when adding future schema changes.</li>
+<li>Uploads are local filesystem files. There is no artifact download/delete endpoint, retention policy, malware scan, storage abstraction beyond the local implementation, or cleanup of a disk file if the subsequent database save fails.</li>
+<li>The API has no authentication, authorization, tenant isolation, rate limits, or audit trail. Workspace/organization names are data fields rather than security boundaries.</li>
+<li>The current UI sends artifacts to the local API origin and does not support retrying an upload/run from an existing pending assessment.</li>
+<li>Assessment rules are intentionally narrow and have no persisted ruleset/version identifier. AI interpretation inherits the accuracy and coverage limitations of those rules and uploaded evidence.</li>
+<li>AI generation has no retry/backoff policy, request rate limits, concurrency limit, spend budget enforcement, provider circuit breaker, streaming, or user cancellation. Queue state is persisted, but the underlying channels are in-memory and unbounded.</li>
+<li>Insight summary word-count and recommendation/roadmap count requirements are validated at the provider boundary; provider output can fail validation and be recorded as a failed insight. The current manual regenerate route permits new generations after prior failures or completion, which can incur provider cost.</li>
+<li>The AI provider adapter is configured through environment/configuration, but the UI does not expose provider settings. The application has no authentication, authorization, tenant isolation, or per-user audit, so it is suitable only for a trusted demo environment.</li>
+<li>The project has no automated test project or CI pipeline in the repository. Build checks do not prove behavior against a running SQL Server or external AI provider.</li>
+<li>Phase 4 can build on <code>IAIInsightGenerator</code>, <code>IAIInsightQueue</code>, the insight persistence model, and deterministic result contracts. Agent orchestration, source/dependency analysis, security and operational dimensions, executive export, PostgreSQL, deployment, and auth remain outside this implementation.</li>
+</ul>
+<ul>
+<li>Unordered lists, and:<ol>
+<li>One</li>
+<li>Two</li>
+<li>Three</li>
+</ol>
+</li>
+<li>More</li>
+</ul>
+<blockquote>
+<p>Blockquote</p>
+</blockquote>
+<p>And <strong>bold</strong>, <em>italics</em>, and even <em>italics and later <strong>bold</strong></em>. Even <del>strikethrough</del>. <a href="https://markdowntohtml.com">A link</a> to somewhere.</p>
+<p>And code highlighting:</p>
+<pre><code class="lang-js"><span class="hljs-keyword">var</span> foo = <span class="hljs-string">'bar'</span>;
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">baz</span><span class="hljs-params">(s)</span> </span>{
+   <span class="hljs-keyword">return</span> foo + <span class="hljs-string">':'</span> + s;
+}
+</code></pre>
+<p>Or inline code like <code>var foo = &#39;bar&#39;;</code>.</p>
+<p>Or an image of bears</p>
+<p><img src="http://placebear.com/200/200" alt="bears"></p>
+<p>The end ...</p>

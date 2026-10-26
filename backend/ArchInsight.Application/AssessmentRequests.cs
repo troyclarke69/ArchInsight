@@ -51,7 +51,9 @@ public static class AssessmentMapping
         a.Result?.Recommendations.OrderBy(r => r.Priority).Select(r => new RecommendationView(r.Priority, r.Title, r.Description, r.Timeframe)).ToArray() ?? [],
         a.Artifacts.Select(x => x.OriginalFileName).ToArray(),
         a.Insights.OrderByDescending(i => i.CreatedDate).Select(Insight).ToArray(),
-        a.AIQuestions.OrderByDescending(q => q.AskedAt).Select(q => new AIQuestionView(q.Id, q.Question, q.Answer, q.Status, q.AskedAt, q.ModelName, q.PromptVersion, q.TokenUsage, q.ErrorMessage)).ToArray());
+        a.AIQuestions.OrderByDescending(q => q.AskedAt).Select(q => new AIQuestionView(q.Id, q.Question, q.Answer, q.Status, q.AskedAt, q.ModelName, q.PromptVersion, q.TokenUsage, q.ErrorMessage)).ToArray(),
+        a.RepositoryAnalysisId, a.Versions.OrderByDescending(v => v.Version).Select(v => new AssessmentVersionView(v.Version, v.RuleVersion, v.PromptVersion, v.AssessmentVersionLabel, v.CreatedAt)).ToArray(),
+        a.RepositoryAnalysis is null ? null : Repository(a.RepositoryAnalysis));
 
     private static AssessmentInsightView Insight(AssessmentInsight i) => new(i.Id, i.Status, i.ExecutiveSummary, i.CurrentState, ReadStrings(i.KeyRisksJson), i.BusinessImpact, i.OperationalRisk, i.TechnicalDebtImpact, i.CloudReadiness, i.DeliveryVelocityImpact, i.DataAndReportingImpact, i.RiskNarrative, i.RecommendedStrategy, ReadStrings(i.RecommendedNextStepsJson), i.ExpectedOutcome, i.Confidence, i.CreatedDate, i.GeneratedAt, i.ModelName, i.PromptVersion, i.TokenUsage, i.ErrorMessage,
         i.Recommendations.OrderBy(r => r.Priority).Select(r => new AIRecommendationView(r.Priority, r.Title, r.Description, r.BusinessBenefit, r.EstimatedComplexity, r.ExpectedOutcome)).ToArray(),
@@ -62,6 +64,12 @@ public static class AssessmentMapping
         try { return System.Text.Json.JsonSerializer.Deserialize<string[]>(json) ?? []; }
         catch (System.Text.Json.JsonException) { return []; }
     }
+
+    private static RepositoryAssessmentView Repository(RepositoryAnalysis r) => new(r.Id, r.Name, r.ContentHash,
+        r.Applications.Select(a => new RepositoryApplicationView(a.Name, a.RepositoryPath, a.Ecosystem, a.Runtime, ReadStrings(a.FrameworksJson), a.Database, a.Hosting, a.Containerized, a.BusinessImpact, a.TechnicalRisk)).ToArray(),
+        r.Services.Select(s => new RepositoryServiceView(s.Name, s.RepositoryPath, s.Version, s.EndpointCount, ReadStrings(s.EndpointsJson), ReadStrings(s.SchemasJson), ReadStrings(s.AuthenticationJson))).ToArray(),
+        r.Dependencies.Select(d => new RepositoryDependencyView(d.Name, d.Version, d.Type, d.Ecosystem, d.RepositoryPath, d.RiskLevel, d.RiskReason)).ToArray(),
+        r.AgentStages.OrderBy(s => s.Sequence).ToArray());
 }
 
 public static class AssessmentComparisonService

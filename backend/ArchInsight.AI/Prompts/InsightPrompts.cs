@@ -25,7 +25,7 @@ public static class InsightPrompts
         """;
 
     public const string QuestionTask = """
-        Answer the user's architecture question using only the deterministic assessment facts and stored AI insight below.
+        Answer the user's architecture question using only the deterministic assessment facts, discovered repository inventory (when present), and stored AI insight below.
         Preserve deterministic scores, severities, and recommendations exactly. If evidence does not answer the question, say what is missing rather than guessing.
         Return JSON with one string property named "answer". Keep the answer direct and explain the relevant facts.
         """;

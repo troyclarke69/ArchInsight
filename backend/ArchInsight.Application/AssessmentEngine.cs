@@ -13,7 +13,12 @@ public sealed record AIRecommendationView(int Priority, string Title, string Des
 public sealed record AIInsightRoadmapView(int Sequence, string Period, string ActivityType, string Title, string Description, string ExpectedOutcome);
 public sealed record AssessmentInsightView(Guid Id, AIInsightStatus Status, string? ExecutiveSummary, string? CurrentState, IReadOnlyList<string> KeyRisks, string? BusinessImpact, string? OperationalRisk, string? TechnicalDebtImpact, string? CloudReadiness, string? DeliveryVelocityImpact, string? DataAndReportingImpact, string? RiskNarrative, string? RecommendedStrategy, IReadOnlyList<string> RecommendedNextSteps, string? ExpectedOutcome, AIInsightConfidence? Confidence, DateTimeOffset CreatedDate, DateTimeOffset? GeneratedAt, string? ModelName, string? PromptVersion, int? TokenUsage, string? ErrorMessage, IReadOnlyList<AIRecommendationView> Recommendations, IReadOnlyList<AIInsightRoadmapView> Roadmap);
 public sealed record AIQuestionView(Guid Id, string Question, string? Answer, AIQuestionStatus Status, DateTimeOffset AskedAt, string? ModelName, string? PromptVersion, int? TokenUsage, string? ErrorMessage);
-public sealed record AssessmentDetail(Guid Id, string Name, string OrganizationName, AssessmentType AssessmentType, AssessmentStatus Status, DateTimeOffset CreatedDate, DateTimeOffset? CompletedDate, int? Score, string? Recommendation, string? ExecutiveSummary, int ApplicationCount, string? ErrorMessage, IReadOnlyList<ScoreCardView> ScoreCards, IReadOnlyList<FindingView> Findings, IReadOnlyList<RecommendationView> Recommendations, IReadOnlyList<string> ArtifactNames, IReadOnlyList<AssessmentInsightView> Insights, IReadOnlyList<AIQuestionView> AIQuestions);
+public sealed record AssessmentVersionView(int Version, string RuleVersion, string PromptVersion, string AssessmentVersionLabel, DateTimeOffset CreatedAt);
+public sealed record RepositoryApplicationView(string Name, string RepositoryPath, string Ecosystem, string Runtime, IReadOnlyList<string> Frameworks, string Database, string Hosting, bool Containerized, int BusinessImpact, int TechnicalRisk);
+public sealed record RepositoryServiceView(string Name, string RepositoryPath, string Version, int EndpointCount, IReadOnlyList<string> Endpoints, IReadOnlyList<string> Schemas, IReadOnlyList<string> AuthenticationSchemes);
+public sealed record RepositoryDependencyView(string Name, string Version, string Type, string Ecosystem, string RepositoryPath, string RiskLevel, string RiskReason);
+public sealed record RepositoryAssessmentView(Guid Id, string Name, string ContentHash, IReadOnlyList<RepositoryApplicationView> Applications, IReadOnlyList<RepositoryServiceView> Services, IReadOnlyList<RepositoryDependencyView> Dependencies, IReadOnlyList<RepositoryAgentStage> Stages);
+public sealed record AssessmentDetail(Guid Id, string Name, string OrganizationName, AssessmentType AssessmentType, AssessmentStatus Status, DateTimeOffset CreatedDate, DateTimeOffset? CompletedDate, int? Score, string? Recommendation, string? ExecutiveSummary, int ApplicationCount, string? ErrorMessage, IReadOnlyList<ScoreCardView> ScoreCards, IReadOnlyList<FindingView> Findings, IReadOnlyList<RecommendationView> Recommendations, IReadOnlyList<string> ArtifactNames, IReadOnlyList<AssessmentInsightView> Insights, IReadOnlyList<AIQuestionView> AIQuestions, Guid? RepositoryAnalysisId, IReadOnlyList<AssessmentVersionView> Versions, RepositoryAssessmentView? Repository);
 
 public sealed record FindingChangeView(string Title, string Description, string Category, FindingSeverity Severity);
 public sealed record SeverityChangeView(FindingSeverity Severity, int BaselineCount, int ComparisonCount, int Change);
@@ -24,6 +29,7 @@ public interface IAssessmentRepository
     Task<Assessment?> FindAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<Assessment>> ListAsync(CancellationToken ct);
     Task AddAsync(Assessment item, CancellationToken ct);
+    void AddVersion(AssessmentVersion version);
     Task SaveChangesAsync(CancellationToken ct);
 }
 
