@@ -10,6 +10,8 @@ public enum AIInsightConfidence { Low, Medium, High }
 public enum RoadmapActivityType { QuickWin, FoundationalInvestment, TransformationActivity }
 public enum ScenarioStatus { Draft, Running, Completed, Failed }
 public enum ScenarioChangeType { RuntimeUpgrade, DatabaseUpgrade, Containerize, MoveToCloud, StandardizeAuthentication, StandardizeErrorHandling, SplitMonolith, RemoveLegacyDependency }
+public enum GovernanceStatus { Pass, Warning, Fail }
+public enum InitiativeStatus { Planned, Approved, InProgress, Blocked, Completed, Cancelled }
 
 public sealed class Assessment
 {
@@ -105,6 +107,153 @@ public sealed class RepositoryAnalysis
     public List<RepositoryAgentStage> AgentStages { get; set; } = [];
     public List<Assessment> Assessments { get; set; } = [];
     public List<ApplicationDependency> ApplicationDependencies { get; set; } = [];
+}
+
+public sealed class ArchitectureSnapshot
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RepositoryAnalysisId { get; set; }
+    public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.UtcNow;
+    public string Hash { get; set; } = "";
+    public int ApplicationCount { get; set; }
+    public int ServiceCount { get; set; }
+    public int DependencyCount { get; set; }
+    public string FrameworkInventoryJson { get; set; } = "[]";
+    public string TechnologyInventoryJson { get; set; } = "[]";
+    public string SummaryJson { get; set; } = "{}";
+    public int RiskScore { get; set; }
+    public int ModernizationScore { get; set; }
+    public int TechnicalDebt { get; set; }
+    public int CloudReadiness { get; set; }
+    public int SecurityScore { get; set; }
+    public int ConsistencyScore { get; set; }
+    public int MaturityIndex { get; set; }
+}
+
+public sealed class DriftAlert
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RepositoryAnalysisId { get; set; }
+    public Guid? PreviousSnapshotId { get; set; }
+    public Guid CurrentSnapshotId { get; set; }
+    public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.UtcNow;
+    public string Category { get; set; } = "Architecture drift";
+    public string Severity { get; set; } = "Medium";
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string AffectedAsset { get; set; } = "";
+    public string Status { get; set; } = "Open";
+}
+
+public sealed class ArchitecturePolicy
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Category { get; set; } = "Technology";
+    public string RuleType { get; set; } = "";
+    public string Severity { get; set; } = "High";
+    public bool Enabled { get; set; } = true;
+    public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class PolicyEvaluation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ArchitectureSnapshotId { get; set; }
+    public Guid ArchitecturePolicyId { get; set; }
+    public DateTimeOffset EvaluatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string Asset { get; set; } = "Repository";
+    public GovernanceStatus Status { get; set; } = GovernanceStatus.Pass;
+    public string Evidence { get; set; } = "";
+}
+
+public sealed class TechnologyStandard
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Technology { get; set; } = "";
+    public string VersionPattern { get; set; } = "*";
+    public string Lifecycle { get; set; } = "Approved";
+    public string Rationale { get; set; } = "";
+    public DateTimeOffset? ReviewDate { get; set; }
+}
+
+public sealed class ArchitectureDecision
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RepositoryAnalysisId { get; set; }
+    public string Title { get; set; } = "";
+    public string Context { get; set; } = "";
+    public string Decision { get; set; } = "";
+    public string Consequences { get; set; } = "";
+    public string Status { get; set; } = "Proposed";
+    public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class PullRequestReview
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RepositoryAnalysisId { get; set; }
+    public int PullRequestNumber { get; set; }
+    public string Title { get; set; } = "";
+    public string HeadRevision { get; set; } = "";
+    public string DiffHash { get; set; } = "";
+    public int RiskScore { get; set; }
+    public string RiskLevel { get; set; } = "Low";
+    public string Summary { get; set; } = "";
+    public string FindingsJson { get; set; } = "[]";
+    public DateTimeOffset ReviewedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class TransformationInitiative
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public int Priority { get; set; } = 3;
+    public InitiativeStatus Status { get; set; } = InitiativeStatus.Planned;
+    public DateTimeOffset? TargetCompletionDate { get; set; }
+    public string Owner { get; set; } = "Unassigned";
+    public Guid? AssessmentId { get; set; }
+    public Guid? ScenarioId { get; set; }
+    public Guid? RecommendationId { get; set; }
+    public Guid? RepositoryAnalysisId { get; set; }
+    public int ExpectedRiskReduction { get; set; }
+    public int ExpectedDebtReduction { get; set; }
+    public int InvestmentPoints { get; set; }
+    public int ActualRiskReduction { get; set; }
+    public int ActualDebtReduction { get; set; }
+    public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class EngineeringMetrics
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RepositoryAnalysisId { get; set; }
+    public DateTimeOffset RecordedAt { get; set; } = DateTimeOffset.UtcNow;
+    public double DeploymentFrequencyPerMonth { get; set; }
+    public double LeadTimeDays { get; set; }
+    public double ChangeFailureRatePercent { get; set; }
+    public double MttrHours { get; set; }
+    public string Source { get; set; } = "Manual entry";
+}
+
+public sealed class KnowledgeNode
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid? RepositoryAnalysisId { get; set; }
+    public string NodeType { get; set; } = "Repository";
+    public string ExternalId { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string MetadataJson { get; set; } = "{}";
+}
+
+public sealed class KnowledgeRelationship
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid FromNodeId { get; set; }
+    public Guid ToNodeId { get; set; }
+    public string RelationshipType { get; set; } = "DEPENDS_ON";
 }
 
 public sealed class DiscoveredApplication

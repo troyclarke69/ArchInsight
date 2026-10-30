@@ -69,7 +69,7 @@ public static class AssessmentMapping
         r.Applications.Select(a => new RepositoryApplicationView(a.Name, a.RepositoryPath, a.Ecosystem, a.Runtime, ReadStrings(a.FrameworksJson), a.Database, a.Hosting, a.Containerized, a.BusinessImpact, a.TechnicalRisk)).ToArray(),
         r.Services.Select(s => new RepositoryServiceView(s.Name, s.RepositoryPath, s.Version, s.EndpointCount, ReadStrings(s.EndpointsJson), ReadStrings(s.SchemasJson), ReadStrings(s.AuthenticationJson))).ToArray(),
         r.Dependencies.Select(d => new RepositoryDependencyView(d.Name, d.Version, d.Type, d.Ecosystem, d.RepositoryPath, d.RiskLevel, d.RiskReason)).ToArray(),
-        r.AgentStages.OrderBy(s => s.Sequence).ToArray());
+        r.AgentStages.OrderBy(s => s.Sequence).Select(s => new RepositoryAgentStageView(s.Id, s.Sequence, s.AgentName, s.Status, s.OutputJson, s.StartedAt, s.CompletedAt)).ToArray());
 }
 
 public static class AssessmentComparisonService

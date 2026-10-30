@@ -14,6 +14,8 @@ using ArchInsight.Application;
 using ArchInsight.Domain;
 using ArchInsight.Infrastructure;
 using ArchInsight.Simulation;
+using ArchLens.Governance;
+using ArchLens.Execution;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Http.Features;
@@ -30,6 +32,8 @@ builder.Services.AddScoped<IAssessmentRepository, EfAssessmentRepository>();
 builder.Services.AddSingleton<IAssessmentQueue, AssessmentQueue>();
 builder.Services.AddSingleton<AssessmentEngine>();
 builder.Services.AddSingleton<TransformationSimulator>();
+builder.Services.AddSingleton<ArchitectureGovernanceEngine>();
+builder.Services.AddSingleton<TransformationForecastEngine>();
 builder.Services.AddSingleton<IArtifactStorage>(_ => new JsonArtifactStorage(builder.Environment.ContentRootPath));
 builder.Services.AddSingleton(new AIProviderOptions(
     builder.Configuration["AI:AzureOpenAI:ChatCompletionsUrl"],
@@ -92,6 +96,19 @@ object ScenarioView(Scenario scenario) => new
     },
     scenario.AdvisorExplanation, scenario.AdvisorModelName, scenario.AdvisorPromptVersion, scenario.AdvisorTokenUsage
 };
+async Task<(ArchitectureSnapshot Snapshot, IReadOnlyList<DriftAlert> Alerts, IReadOnlyList<PolicyEvaluation> Evaluations)> SaveGovernanceSnapshotAsync(AssessmentDbContext db, ArchitectureGovernanceEngine engine, Guid repositoryId, RepositoryInventory inventory, CancellationToken ct)
+{
+    var previous = (await db.ArchitectureSnapshots.Where(s => s.RepositoryAnalysisId == repositoryId).ToListAsync(ct)).OrderByDescending(s => s.CreatedDate).FirstOrDefault();
+    var snapshot = engine.CreateSnapshot(repositoryId, inventory);
+    var alerts = previous is null ? [] : engine.Compare(previous, snapshot).ToArray();
+    var policies = await db.ArchitecturePolicies.ToListAsync(ct);
+    var evaluations = engine.Evaluate(snapshot, inventory, policies).ToArray();
+    db.ArchitectureSnapshots.Add(snapshot);
+    db.DriftAlerts.AddRange(alerts);
+    db.PolicyEvaluations.AddRange(evaluations);
+    await db.SaveChangesAsync(ct);
+    return (snapshot, alerts, evaluations);
+}
 async Task<Assessment> NewDiscoveredAssessmentAsync(AssessmentType type, RepositoryAnalysis repository, string? organizationName, GeneratedArtifact generatedArtifact, IArtifactStorage storage, CancellationToken ct)
 {
     var suffix = type == AssessmentType.Modernization ? "modernization" : "service consistency";
@@ -130,6 +147,223 @@ app.MapGet("/api/repositories/{id:guid}/sbom", async (Guid id, AssessmentDbConte
 {
     var sbom = await db.RepositoryAnalyses.Where(r => r.Id == id).Select(r => r.SbomJson).SingleOrDefaultAsync(ct);
     return sbom is null ? Results.NotFound() : Results.File(Encoding.UTF8.GetBytes(sbom), "application/vnd.cyclonedx+json", $"archinsight-{id:N}-sbom.json");
+});
+app.MapGet("/api/governance/overview", async (AssessmentDbContext db, CancellationToken ct) =>
+{
+    var repositories = await db.RepositoryAnalyses.Select(r => new { r.Id, r.Name }).ToListAsync(ct);
+    var snapshots = await db.ArchitectureSnapshots.ToListAsync(ct);
+    var latest = snapshots.GroupBy(s => s.RepositoryAnalysisId).Select(g => g.OrderByDescending(s => s.CreatedDate).First()).ToArray();
+    var latestIds = latest.Select(s => s.Id).ToArray();
+    var evaluations = latestIds.Length == 0 ? [] : await db.PolicyEvaluations.Where(e => latestIds.Contains(e.ArchitectureSnapshotId)).ToListAsync(ct);
+    var alerts = await db.DriftAlerts.Where(a => a.Status == "Open").ToListAsync(ct);
+    var policies = await db.ArchitecturePolicies.CountAsync(p => p.Enabled, ct);
+    var failed = evaluations.Count(e => e.Status == GovernanceStatus.Fail);
+    var warning = evaluations.Count(e => e.Status == GovernanceStatus.Warning);
+    return Results.Ok(new
+    {
+        repositories = repositories.Count, monitoredRepositories = latest.Length,
+        architectureHealth = latest.Length == 0 ? 0 : (int)Math.Round(latest.Average(s => s.MaturityIndex)),
+        technologyRisk = latest.Length == 0 ? 0 : (int)Math.Round(latest.Average(s => s.RiskScore)),
+        modernizationProgress = latest.Length == 0 ? 0 : (int)Math.Round(latest.Average(s => s.ModernizationScore)),
+        policyCompliance = evaluations.Count == 0 ? 100 : (int)Math.Round(100d * evaluations.Count(e => e.Status == GovernanceStatus.Pass) / evaluations.Count),
+        policyCount = policies, failedPolicies = failed, warningPolicies = warning, openAlerts = alerts.Count,
+        criticalAlerts = alerts.Count(a => a.Severity == "Critical"),
+        biggestRisks = alerts.OrderByDescending(a => a.Severity == "Critical" ? 4 : a.Severity == "High" ? 3 : a.Severity == "Medium" ? 2 : 1).Take(6).Select(a => new { a.Id, a.RepositoryAnalysisId, repositoryName = repositories.FirstOrDefault(r => r.Id == a.RepositoryAnalysisId)?.Name, a.Category, a.Severity, a.Title, a.Description, a.AffectedAsset, a.CreatedDate }),
+        trends = snapshots.OrderBy(s => s.CreatedDate).TakeLast(60).Select(s => new { s.RepositoryAnalysisId, repositoryName = repositories.FirstOrDefault(r => r.Id == s.RepositoryAnalysisId)?.Name, s.CreatedDate, s.RiskScore, s.ModernizationScore, s.TechnicalDebt, s.CloudReadiness, s.SecurityScore, s.ConsistencyScore, s.MaturityIndex }),
+        latestSnapshots = latest.Select(s => new { s.RepositoryAnalysisId, repositoryName = repositories.FirstOrDefault(r => r.Id == s.RepositoryAnalysisId)?.Name, s.CreatedDate, s.Hash, s.ApplicationCount, s.ServiceCount, s.DependencyCount, s.RiskScore, s.MaturityIndex })
+    });
+});
+app.MapGet("/api/governance/repositories/{id:guid}", async (Guid id, AssessmentDbContext db, CancellationToken ct) =>
+{
+    var repository = await db.RepositoryAnalyses.SingleOrDefaultAsync(r => r.Id == id, ct);
+    if (repository is null) return Results.NotFound();
+    var snapshots = await db.ArchitectureSnapshots.Where(s => s.RepositoryAnalysisId == id).ToListAsync(ct);
+    var alerts = await db.DriftAlerts.Where(a => a.RepositoryAnalysisId == id).ToListAsync(ct);
+    var evaluations = await db.PolicyEvaluations.Where(e => snapshots.Select(s => s.Id).Contains(e.ArchitectureSnapshotId)).ToListAsync(ct);
+    var policies = await db.ArchitecturePolicies.ToDictionaryAsync(p => p.Id, ct);
+    var decisions = await db.ArchitectureDecisions.Where(d => d.RepositoryAnalysisId == id).ToListAsync(ct);
+    var pullRequests = await db.PullRequestReviews.Where(p => p.RepositoryAnalysisId == id).ToListAsync(ct);
+    return Results.Ok(new
+    {
+        repository = new { repository.Id, repository.Name },
+        snapshots = snapshots.OrderByDescending(s => s.CreatedDate),
+        alerts = alerts.OrderByDescending(a => a.CreatedDate),
+        evaluations = evaluations.Select(e => new { e.Id, e.ArchitectureSnapshotId, e.ArchitecturePolicyId, policyName = policies.GetValueOrDefault(e.ArchitecturePolicyId)?.Name, e.Asset, status = e.Status.ToString(), e.Evidence, e.EvaluatedAt }),
+        decisions = decisions.OrderByDescending(d => d.CreatedDate),
+        pullRequests = pullRequests.OrderByDescending(p => p.ReviewedAt)
+    });
+});
+app.MapPost("/api/repositories/{id:guid}/monitor", async (Guid id, [FromForm] IFormFile file, RepositoryZipAnalyzer analyzer, AssessmentDbContext db, ArchitectureGovernanceEngine governance, CancellationToken ct) =>
+{
+    if (file.Length is <= 0 or > RepositoryZipAnalyzer.MaximumArchiveBytes) return Results.BadRequest(new { error = "Monitoring scans require a ZIP file between 1 byte and 25 MB." });
+    if (!Path.GetExtension(file.FileName).Equals(".zip", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest(new { error = "Upload a .zip repository snapshot." });
+    var repository = await db.RepositoryAnalyses.SingleOrDefaultAsync(r => r.Id == id, ct);
+    if (repository is null) return Results.NotFound(new { error = "Repository not found." });
+    try
+    {
+        await using var input = file.OpenReadStream();
+        var inventory = await analyzer.AnalyzeAsync(input, file.FileName, ct);
+        var result = await SaveGovernanceSnapshotAsync(db, governance, id, inventory, ct);
+        return Results.Created($"/api/governance/repositories/{id}", new { repositoryId = id, repository.Name, snapshot = new { result.Snapshot.Id, result.Snapshot.CreatedDate, result.Snapshot.Hash, result.Snapshot.RiskScore, result.Snapshot.ModernizationScore, result.Snapshot.MaturityIndex }, newAlerts = result.Alerts, policyResults = result.Evaluations.Count, passed = result.Evaluations.Count(e => e.Status == GovernanceStatus.Pass), warnings = result.Evaluations.Count(e => e.Status == GovernanceStatus.Warning), failed = result.Evaluations.Count(e => e.Status == GovernanceStatus.Fail) });
+    }
+    catch (InvalidDataException ex) { return Results.BadRequest(new { error = ex.Message }); }
+}).DisableAntiforgery();
+app.MapGet("/api/governance/policies", async (AssessmentDbContext db, CancellationToken ct) => Results.Ok(await db.ArchitecturePolicies.OrderBy(p => p.Category).ThenBy(p => p.Name).ToListAsync(ct)));
+app.MapPut("/api/governance/policies/{id:guid}", async (Guid id, UpdatePolicyRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    var policy = await db.ArchitecturePolicies.SingleOrDefaultAsync(p => p.Id == id, ct);
+    if (policy is null) return Results.NotFound();
+    policy.Enabled = request.Enabled;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(policy);
+});
+app.MapGet("/api/governance/standards", async (AssessmentDbContext db, CancellationToken ct) => Results.Ok(await db.TechnologyStandards.OrderBy(s => s.Lifecycle).ThenBy(s => s.Technology).ToListAsync(ct)));
+app.MapPost("/api/governance/alerts/{id:guid}/status", async (Guid id, UpdateAlertStatusRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    if (request.Status is not ("Open" or "Acknowledged" or "Resolved")) return Results.BadRequest(new { error = "Status must be Open, Acknowledged, or Resolved." });
+    var alert = await db.DriftAlerts.SingleOrDefaultAsync(a => a.Id == id, ct);
+    if (alert is null) return Results.NotFound();
+    alert.Status = request.Status;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { alert.Id, alert.Status });
+});
+app.MapGet("/api/governance/decisions", async (Guid repositoryId, AssessmentDbContext db, CancellationToken ct) => Results.Ok(await db.ArchitectureDecisions.Where(d => d.RepositoryAnalysisId == repositoryId).ToListAsync(ct)));
+app.MapPost("/api/governance/decisions", async (CreateDecisionRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Decision)) return Results.BadRequest(new { error = "Decision title and decision text are required." });
+    if (request.Title.Length > 300 || request.Context.Length > 10000 || request.Decision.Length > 10000 || request.Consequences.Length > 10000) return Results.BadRequest(new { error = "Decision text exceeds the allowed length." });
+    if (!await db.RepositoryAnalyses.AnyAsync(r => r.Id == request.RepositoryAnalysisId, ct)) return Results.NotFound(new { error = "Repository not found." });
+    var decision = new ArchitectureDecision { RepositoryAnalysisId = request.RepositoryAnalysisId, Title = request.Title.Trim(), Context = request.Context.Trim(), Decision = request.Decision.Trim(), Consequences = request.Consequences.Trim(), Status = request.Status is "Accepted" or "Superseded" or "Proposed" ? request.Status : "Proposed" };
+    db.ArchitectureDecisions.Add(decision);
+    await db.SaveChangesAsync(ct);
+    return Results.Created($"/api/governance/decisions/{decision.Id}", decision);
+});
+app.MapPost("/api/repositories/{id:guid}/pull-requests/review", async (Guid id, ReviewPullRequestRequest request, AssessmentDbContext db, ArchitectureGovernanceEngine governance, CancellationToken ct) =>
+{
+    if (request.PullRequestNumber < 1 || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Diff) || request.Diff.Length > 300_000) return Results.BadRequest(new { error = "Provide a PR number, title, and diff no larger than 300 KB." });
+    if (!await db.RepositoryAnalyses.AnyAsync(r => r.Id == id, ct)) return Results.NotFound(new { error = "Repository not found." });
+    var result = governance.AnalyzePullRequest(request.Diff, request.Title.Trim());
+    var head = (request.HeadRevision ?? "unknown").Trim();
+    var review = new PullRequestReview { RepositoryAnalysisId = id, PullRequestNumber = request.PullRequestNumber, Title = request.Title.Trim()[..Math.Min(request.Title.Trim().Length, 300)], HeadRevision = head[..Math.Min(head.Length, 120)], DiffHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Diff))).ToLowerInvariant(), RiskScore = result.RiskScore, RiskLevel = result.RiskLevel, Summary = result.Summary, FindingsJson = JsonSerializer.Serialize(result.Findings) };
+    db.PullRequestReviews.Add(review);
+    await db.SaveChangesAsync(ct);
+    return Results.Created($"/api/repositories/{id}/pull-requests", new { review.Id, review.PullRequestNumber, review.Title, review.HeadRevision, review.RiskScore, review.RiskLevel, review.Summary, findings = result.Findings, review.ReviewedAt });
+});
+app.MapGet("/api/repositories/{id:guid}/pull-requests", async (Guid id, AssessmentDbContext db, CancellationToken ct) => Results.Ok(await db.PullRequestReviews.Where(r => r.RepositoryAnalysisId == id).ToListAsync(ct)));
+app.MapPost("/api/governance/advice", async (GovernanceAdviceRequest request, AssessmentDbContext db, IAIInsightGenerator generator, TransformationSimulator simulator, CancellationToken ct) =>
+{
+    if (!generator.IsConfigured) return Results.Problem("Configure an AI provider to request governance advice.", statusCode: StatusCodes.Status503ServiceUnavailable);
+    var selected = await db.RepositoryAnalyses.Include(r => r.Applications).Include(r => r.Dependencies).SingleOrDefaultAsync(r => r.Id == request.RepositoryAnalysisId, ct);
+    if (selected is null) return Results.NotFound(new { error = "Repository not found." });
+    var assessmentCandidates = await db.Assessments.Include(a => a.Result)!.ThenInclude(r => r!.Findings).Include(a => a.Result)!.ThenInclude(r => r!.ScoreCards).Include(a => a.Insights).Where(a => a.RepositoryAnalysisId == selected.Id && a.Status == AssessmentStatus.Completed).ToListAsync(ct);
+    var assessment = assessmentCandidates.OrderByDescending(a => a.CreatedDate).FirstOrDefault();
+    if (assessment is null) return Results.Conflict(new { error = "Governance advice requires a completed assessment linked to this repository." });
+    var latest = (await db.ArchitectureSnapshots.Where(s => s.RepositoryAnalysisId == selected.Id).ToListAsync(ct)).OrderByDescending(s => s.CreatedDate).FirstOrDefault();
+    var openAlerts = await db.DriftAlerts.Where(a => a.RepositoryAnalysisId == selected.Id && a.Status == "Open").ToListAsync(ct);
+    var adviceContext = JsonSerializer.Serialize(new { latestSnapshot = latest is null ? null : new { latest.RiskScore, latest.ModernizationScore, latest.TechnicalDebt, latest.CloudReadiness, latest.SecurityScore, latest.ConsistencyScore, latest.MaturityIndex }, alerts = openAlerts.Select(a => new { a.Category, a.Severity, a.Title, a.Description }), portfolio = simulator.Prioritize(selected).Take(10), question = request.Question });
+    var insight = assessment.Insights.FirstOrDefault(i => i.Status == AIInsightStatus.Completed);
+    try
+    {
+        var response = await generator.AnswerQuestionAsync(assessment, insight, $"Answer as an architecture governance advisor using current snapshot, drift alerts, and portfolio facts. Distinguish evidence from inference. Context: {adviceContext}", ct);
+        return Results.Ok(new { answer = response.Answer, response.ModelName, response.PromptVersion, response.TokenUsage });
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapGet("/api/transformation/recommendations", async (AssessmentDbContext db, CancellationToken ct) =>
+{
+    var recommendations = await db.Recommendations.Include(r => r.AssessmentResult).ThenInclude(r => r!.Assessment).OrderBy(r => r.Priority).ToListAsync(ct);
+    return Results.Ok(recommendations.Select(r => new { r.Id, r.Title, r.Description, r.Timeframe, r.Priority, assessmentId = r.AssessmentResult?.AssessmentId, assessmentName = r.AssessmentResult?.Assessment?.Name, repositoryAnalysisId = r.AssessmentResult?.Assessment?.RepositoryAnalysisId }));
+});
+app.MapGet("/api/transformation/portfolio", async (AssessmentDbContext db, TransformationForecastEngine forecastEngine, CancellationToken ct) =>
+{
+    var initiatives = await db.TransformationInitiatives.ToListAsync(ct);
+    var scenarios = await db.Scenarios.Include(s => s.Result).ToListAsync(ct);
+    var snapshots = await db.ArchitectureSnapshots.ToListAsync(ct);
+    var metrics = await db.EngineeringMetrics.ToListAsync(ct);
+    var forecast = forecastEngine.Forecast(snapshots, initiatives);
+    var benchmark = forecastEngine.Benchmark(snapshots);
+    var completed = initiatives.Where(i => i.Status == InitiativeStatus.Completed).ToArray();
+    var total = initiatives.Count;
+    var top = snapshots.GroupBy(s => s.RepositoryAnalysisId).Select(g => g.OrderByDescending(s => s.CreatedDate).First()).ToArray();
+    var latestMetrics = metrics.GroupBy(m => m.RepositoryAnalysisId).Select(g => g.OrderByDescending(m => m.RecordedAt).First()).ToDictionary(m => m.RepositoryAnalysisId);
+    var matched = top.Where(s => latestMetrics.ContainsKey(s.RepositoryAnalysisId)).Select(s => (Snapshot: s, Metric: latestMetrics[s.RepositoryAnalysisId])).ToArray();
+    static double Correlation(IEnumerable<(double X, double Y)> source)
+    {
+        var points = source.ToArray(); if (points.Length < 2) return 0;
+        var meanX = points.Average(x => x.X); var meanY = points.Average(x => x.Y);
+        var numerator = points.Sum(x => (x.X - meanX) * (x.Y - meanY));
+        var denom = Math.Sqrt(points.Sum(x => Math.Pow(x.X - meanX, 2)) * points.Sum(x => Math.Pow(x.Y - meanY, 2)));
+        return denom == 0 ? 0 : Math.Round(numerator / denom, 2);
+    }
+    return Results.Ok(new { initiatives = initiatives.OrderByDescending(i => i.Priority).ThenBy(i => i.TargetCompletionDate), scenarios = scenarios.Select(s => new { s.Id, s.AssessmentId, s.Name, status = s.Status.ToString(), riskReduction = s.Result?.RiskReduction, debtReduction = s.Result?.TechnicalDebtReduction }), metrics = metrics.OrderByDescending(m => m.RecordedAt).Take(40), forecast, benchmark, kpis = new { totalInitiatives = total, completionPercent = total == 0 ? 0 : (int)Math.Round(100d * completed.Length / total), completed = completed.Length, blocked = initiatives.Count(i => i.Status == InitiativeStatus.Blocked), active = initiatives.Count(i => i.Status == InitiativeStatus.InProgress), riskReduced = completed.Sum(i => i.ActualRiskReduction), debtReduced = completed.Sum(i => i.ActualDebtReduction), investmentPoints = initiatives.Sum(i => i.InvestmentPoints), maturityChange = top.Length == 0 ? 0 : top.Average(x => x.MaturityIndex) }, deliveryCorrelation = new { sampleSize = matched.Length, leadTimeVsRisk = Correlation(matched.Select(x => (x.Metric.LeadTimeDays, (double)x.Snapshot.RiskScore))), changeFailureVsConsistency = Correlation(matched.Select(x => (x.Metric.ChangeFailureRatePercent, (double)(100 - x.Snapshot.ConsistencyScore)))), deploymentFrequencyVsMaturity = Correlation(matched.Select(x => (x.Metric.DeploymentFrequencyPerMonth, (double)x.Snapshot.MaturityIndex))), message = matched.Length < 2 ? "Record metrics for multiple repositories to estimate directional delivery and architecture correlations." : "Pearson correlations are descriptive and do not establish causality." }, quarterlyReport = new { generatedAt = DateTimeOffset.UtcNow, currentState = new { repositories = top.Length, architectureHealth = top.Length == 0 ? 0 : top.Average(s => s.MaturityIndex), technologyRisk = top.Length == 0 ? 0 : top.Average(s => s.RiskScore) }, investment = initiatives.Count, completedImprovements = completed.Select(i => new { i.Name, i.ActualRiskReduction, i.ActualDebtReduction }), roadmap = initiatives.Where(i => i.Status is InitiativeStatus.Planned or InitiativeStatus.Approved or InitiativeStatus.InProgress or InitiativeStatus.Blocked).OrderByDescending(i => i.Priority).Take(8).Select(i => new { i.Name, status = i.Status.ToString(), i.TargetCompletionDate }) } });
+});
+app.MapPost("/api/transformation/initiatives", async (CreateInitiativeRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 200) return Results.BadRequest(new { error = "Initiative name must contain 1–200 characters." });
+    if (request.Priority is < 1 or > 5) return Results.BadRequest(new { error = "Priority must be between 1 (highest) and 5." });
+    Recommendation? recommendation = null;
+    if (request.RecommendationId is not null) { recommendation = await db.Recommendations.Include(r => r.AssessmentResult).SingleOrDefaultAsync(r => r.Id == request.RecommendationId, ct); if (recommendation is null) return Results.NotFound(new { error = "Recommendation not found." }); }
+    Scenario? scenario = null;
+    if (request.ScenarioId is not null) { scenario = await db.Scenarios.Include(s => s.Result).Include(s => s.Assessment).SingleOrDefaultAsync(s => s.Id == request.ScenarioId, ct); if (scenario is null) return Results.NotFound(new { error = "Scenario not found." }); }
+    if (recommendation?.AssessmentResult is not null && scenario is not null && recommendation.AssessmentResult.AssessmentId != scenario.AssessmentId) return Results.BadRequest(new { error = "The selected recommendation and scenario must belong to the same assessment." });
+    var name = recommendation?.Title ?? request.Name.Trim();
+    var item = new TransformationInitiative { Name = name[..Math.Min(name.Length, 200)], Description = (recommendation?.Description ?? request.Description ?? "").Trim(), Priority = request.Priority, Owner = string.IsNullOrWhiteSpace(request.Owner) ? "Unassigned" : request.Owner.Trim()[..Math.Min(request.Owner.Trim().Length, 160)], TargetCompletionDate = request.TargetCompletionDate, AssessmentId = recommendation?.AssessmentResult?.AssessmentId ?? scenario?.AssessmentId ?? request.AssessmentId, RepositoryAnalysisId = request.RepositoryAnalysisId ?? scenario?.Assessment?.RepositoryAnalysisId, RecommendationId = recommendation?.Id, ScenarioId = scenario?.Id, ExpectedRiskReduction = Math.Clamp(request.ExpectedRiskReduction ?? scenario?.Result?.RiskReduction ?? 0, 0, 100), ExpectedDebtReduction = Math.Clamp(request.ExpectedDebtReduction ?? scenario?.Result?.TechnicalDebtReduction ?? 0, 0, 100), InvestmentPoints = Math.Clamp(request.InvestmentPoints ?? scenario?.Result?.ImplementationEffort ?? 1, 1, 100) };
+    db.TransformationInitiatives.Add(item); await db.SaveChangesAsync(ct); return Results.Created($"/api/transformation/initiatives/{item.Id}", item);
+});
+app.MapPut("/api/transformation/initiatives/{id:guid}", async (Guid id, UpdateInitiativeRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    var item = await db.TransformationInitiatives.SingleOrDefaultAsync(i => i.Id == id, ct); if (item is null) return Results.NotFound();
+    if (!Enum.TryParse<InitiativeStatus>(request.Status, true, out var status)) return Results.BadRequest(new { error = "Status must be Planned, Approved, InProgress, Blocked, Completed, or Cancelled." });
+    item.Status = status; if (request.ActualRiskReduction is not null) item.ActualRiskReduction = Math.Clamp(request.ActualRiskReduction.Value, 0, 100); if (request.ActualDebtReduction is not null) item.ActualDebtReduction = Math.Clamp(request.ActualDebtReduction.Value, 0, 100);
+    await db.SaveChangesAsync(ct); return Results.Ok(item);
+});
+app.MapPost("/api/transformation/repositories/{id:guid}/engineering-metrics", async (Guid id, CreateEngineeringMetricsRequest request, AssessmentDbContext db, CancellationToken ct) =>
+{
+    if (!await db.RepositoryAnalyses.AnyAsync(r => r.Id == id, ct)) return Results.NotFound(new { error = "Repository not found." });
+    if (request.DeploymentFrequencyPerMonth < 0 || request.LeadTimeDays < 0 || request.ChangeFailureRatePercent is < 0 or > 100 || request.MttrHours < 0) return Results.BadRequest(new { error = "Metrics must be non-negative; change failure rate must be 0–100%." });
+    var metric = new EngineeringMetrics { RepositoryAnalysisId = id, DeploymentFrequencyPerMonth = request.DeploymentFrequencyPerMonth, LeadTimeDays = request.LeadTimeDays, ChangeFailureRatePercent = request.ChangeFailureRatePercent, MttrHours = request.MttrHours, Source = string.IsNullOrWhiteSpace(request.Source) ? "Manual entry" : request.Source.Trim()[..Math.Min(request.Source.Trim().Length, 160)] };
+    db.EngineeringMetrics.Add(metric); await db.SaveChangesAsync(ct); return Results.Created($"/api/transformation/repositories/{id}/engineering-metrics", metric);
+});
+app.MapGet("/api/transformation/knowledge-graph/{id:guid}", async (Guid id, AssessmentDbContext db, CancellationToken ct) =>
+{
+    var repository = await db.RepositoryAnalyses.Include(r => r.Applications).Include(r => r.Services).Include(r => r.Dependencies).Include(r => r.ApplicationDependencies).SingleOrDefaultAsync(r => r.Id == id, ct);
+    if (repository is null) return Results.NotFound();
+    var nodes = new List<KnowledgeNode>(); var edges = new List<(string Source, string Target, string Relationship)>(); var ids = new Dictionary<string, KnowledgeNode>(StringComparer.OrdinalIgnoreCase);
+    var storedNodes = await db.KnowledgeNodes.Where(n => n.RepositoryAnalysisId == id).ToListAsync(ct);
+    void Node(string key, string type, string label) { if (!ids.TryGetValue(key, out var node)) { node = storedNodes.FirstOrDefault(n => n.NodeType == type && n.ExternalId == key) ?? new KnowledgeNode { RepositoryAnalysisId = id, NodeType = type[..Math.Min(type.Length, 40)], ExternalId = key[..Math.Min(key.Length, 200)] }; if (!storedNodes.Contains(node)) { storedNodes.Add(node); nodes.Add(node); } ids[key] = node; } node.Label = label[..Math.Min(label.Length, 300)]; }
+    void Edge(string source, string target, string relation) { if (ids.ContainsKey(source) && ids.ContainsKey(target)) edges.Add((source, target, relation)); }
+    Node("repo", "Repository", repository.Name);
+    foreach (var appItem in repository.Applications) { var key = "app:" + appItem.Name; Node(key, "Application", appItem.Name); Edge("repo", key, "CONTAINS"); foreach (var framework in JsonSerializer.Deserialize<string[]>(appItem.FrameworksJson) ?? []) { var tech = "tech:" + framework; Node(tech, "Technology", framework); Edge(key, tech, "USES"); } }
+    foreach (var service in repository.Services) { var key = "service:" + service.Name; Node(key, "Service", service.Name); Edge("repo", key, "CONTAINS"); }
+    foreach (var dependency in repository.Dependencies.Take(200)) { var key = "technology:" + dependency.Name + "@" + dependency.Version; Node(key, "Dependency", dependency.Name + " " + dependency.Version); foreach (var appItem in repository.Applications.Take(50)) Edge("app:" + appItem.Name, key, "USES"); }
+    foreach (var relationship in repository.ApplicationDependencies) { Node("app:" + relationship.Source, "Application", relationship.Source); Node("app:" + relationship.Target, "Application", relationship.Target); Edge("app:" + relationship.Source, "app:" + relationship.Target, "DEPENDS_ON"); }
+    var linkedAssessments = await db.Assessments.Where(a => a.RepositoryAnalysisId == id).Include(a => a.Result).ThenInclude(r => r!.Findings).Include(a => a.Result).ThenInclude(r => r!.Recommendations).ToListAsync(ct);
+    foreach (var assessment in linkedAssessments)
+    {
+        foreach (var finding in assessment.Result?.Findings ?? []) { var key = "finding:" + finding.Id; Node(key, "Finding", finding.Title); Edge("repo", key, "HAS_FINDING"); foreach (var appItem in repository.Applications.Where(a => (finding.Title + " " + finding.Description).Contains(a.Name, StringComparison.OrdinalIgnoreCase))) Edge(key, "app:" + appItem.Name, "AFFECTS"); }
+        foreach (var recommendation in assessment.Result?.Recommendations ?? []) { var key = "recommendation:" + recommendation.Id; Node(key, "Recommendation", recommendation.Title); Edge("repo", key, "HAS_RECOMMENDATION"); foreach (var appItem in repository.Applications.Where(a => (recommendation.Title + " " + recommendation.Description).Contains(a.Name, StringComparison.OrdinalIgnoreCase))) Edge(key, "app:" + appItem.Name, "TARGETS"); }
+    }
+    var initiatives = await db.TransformationInitiatives.Where(i => i.RepositoryAnalysisId == id).ToListAsync(ct);
+    foreach (var initiative in initiatives) { var key = "initiative:" + initiative.Id; Node(key, "Initiative", initiative.Name); if (initiative.RecommendationId is not null) Edge(key, "recommendation:" + initiative.RecommendationId, "IMPLEMENTS"); foreach (var appItem in repository.Applications.Where(a => (initiative.Name + " " + initiative.Description).Contains(a.Name, StringComparison.OrdinalIgnoreCase))) Edge(key, "app:" + appItem.Name, "ADDRESSES"); }
+    var currentIds = ids.Values.Select(n => n.Id).ToHashSet();
+    var staleNodes = storedNodes.Where(n => !currentIds.Contains(n.Id)).ToArray();
+    if (staleNodes.Length > 0) { var staleIds = staleNodes.Select(n => n.Id).ToArray(); var staleEdges = await db.KnowledgeRelationships.Where(r => staleIds.Contains(r.FromNodeId) || staleIds.Contains(r.ToNodeId)).ToListAsync(ct); db.KnowledgeRelationships.RemoveRange(staleEdges); db.KnowledgeNodes.RemoveRange(staleNodes); }
+    await db.SaveChangesAsync(ct);
+    var persistedIds = ids.Values.Select(n => n.Id).ToArray();
+    var existingEdges = await db.KnowledgeRelationships.Where(r => persistedIds.Contains(r.FromNodeId) && persistedIds.Contains(r.ToNodeId)).ToListAsync(ct);
+    var edgeKeys = existingEdges.Select(r => $"{r.FromNodeId}:{r.ToNodeId}:{r.RelationshipType}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+    foreach (var edge in edges) { var from = ids[edge.Source].Id; var to = ids[edge.Target].Id; if (edgeKeys.Add($"{from}:{to}:{edge.Relationship}")) db.KnowledgeRelationships.Add(new KnowledgeRelationship { FromNodeId = from, ToNodeId = to, RelationshipType = edge.Relationship }); }
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { repositoryAnalysisId = id, nodes = ids.Values.Select(n => new { id = n.Id, type = n.NodeType, label = n.Label }), relationships = existingEdges.Concat(await db.KnowledgeRelationships.Where(r => persistedIds.Contains(r.FromNodeId) && persistedIds.Contains(r.ToNodeId)).ToListAsync(ct)).DistinctBy(r => r.Id).Select(r => new { source = r.FromNodeId, target = r.ToNodeId, relationship = r.RelationshipType }), limits = new { dependencies = 200, applications = 50 } });
+});
+app.MapPost("/api/transformation/boardroom", async (BoardroomRequest request, AssessmentDbContext db, IAIInsightGenerator generator, TransformationForecastEngine forecastEngine, CancellationToken ct) =>
+{
+    if (!generator.IsConfigured) return Results.Problem("Configure Azure OpenAI or OpenAI credentials to generate an AI boardroom briefing.", statusCode: StatusCodes.Status503ServiceUnavailable);
+    var snapshots = await db.ArchitectureSnapshots.ToListAsync(ct); var initiatives = await db.TransformationInitiatives.ToListAsync(ct); var assessments = await db.Assessments.Include(a => a.Result).OrderByDescending(a => a.CreatedDate).Take(20).ToListAsync(ct);
+    if (assessments.Count == 0) return Results.Conflict(new { error = "Create an assessment before requesting a briefing." });
+    var audience = request.Audience is "CTO" or "CIO" or "Architecture Review Board" or "Engineering Leadership" ? request.Audience : "CTO";
+    var context = JsonSerializer.Serialize(new { audience, forecast = forecastEngine.Forecast(snapshots, initiatives), initiatives = initiatives.Select(i => new { i.Name, status = i.Status.ToString(), i.Priority, i.ExpectedRiskReduction, i.ExpectedDebtReduction, i.ActualRiskReduction, i.ActualDebtReduction }), assessments = assessments.Select(a => new { a.Name, a.Status, score = a.Result?.OverallScore, recommendation = a.Result?.Recommendation }), snapshots = snapshots.OrderByDescending(s => s.CreatedDate).Take(12).Select(s => new { s.RiskScore, s.MaturityIndex, s.TechnicalDebt, s.CreatedDate }), instruction = audience == "Strategy Advisor" && !string.IsNullOrWhiteSpace(request.Question) ? request.Question : "Produce a concise quarterly architecture review: current state, major risks, trend analysis, investment/value, completed improvements, roadmap, and forecast. Distinguish evidence from heuristic projection." });
+    var assessment = assessments.First(); try { var answer = await generator.AnswerQuestionAsync(assessment, null, context, ct); return Results.Ok(new { audience, answer = answer.Answer, generatedAt = DateTimeOffset.UtcNow, answer.ModelName, answer.PromptVersion }); } catch (Exception ex) when (ex is not OperationCanceledException) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
 });
 app.MapGet("/api/assessments/{id:guid}/scenarios", async (Guid id, AssessmentDbContext db, CancellationToken ct) =>
 {
@@ -241,7 +475,7 @@ app.MapPost("/api/scenarios/{id:guid}/advisor", async (Guid id, AssessmentDbCont
 app.MapPost("/api/repositories/analyze", async (
     [FromForm] IFormFile file, [FromForm] string? name, [FromForm] string? organizationName,
     RepositoryZipAnalyzer analyzer, IAgentOrchestrator orchestrator, IArtifactStorage storage,
-    IAssessmentQueue assessmentQueue, AssessmentDbContext db, CancellationToken ct) =>
+    IAssessmentQueue assessmentQueue, AssessmentDbContext db, ArchitectureGovernanceEngine governance, CancellationToken ct) =>
 {
     if (file.Length is <= 0 or > RepositoryZipAnalyzer.MaximumArchiveBytes) return Results.BadRequest(new { error = "Repository ZIP files must be between 1 byte and 25 MB." });
     if (!Path.GetExtension(file.FileName).Equals(".zip", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest(new { error = "Upload a repository archive with a .zip extension." });
@@ -300,12 +534,13 @@ app.MapPost("/api/repositories/analyze", async (
         repository.AgentStages.Add(new RepositoryAgentStage { RepositoryAnalysisId = repositoryId, Sequence = 6, AgentName = "ExecutiveAdvisorAgent", Status = repository.Assessments.Count > 0 ? "WaitingForInsight" : "Skipped", OutputJson = "{}" });
         db.RepositoryAnalyses.Add(repository);
         await db.SaveChangesAsync(ct);
+        var monitoring = await SaveGovernanceSnapshotAsync(db, governance, repository.Id, inventory, ct);
         foreach (var assessment in repository.Assessments) await assessmentQueue.EnqueueAsync(assessment.Id, ct);
-        return Results.Created($"/api/repositories/{repository.Id}", new { repositoryId = repository.Id, repository.Name, repository.ContentHash, applications = repository.Applications.Count, services = repository.Services.Count, dependencies = repository.Dependencies.Count, workflowCount = inventory.BuildWorkflows.Count + inventory.DeploymentWorkflows.Count, assessments = repository.Assessments.Select(a => new { a.Id, a.AssessmentType, a.Status }), warnings = inventory.Warnings, detailUrl = $"/api/repositories/{repository.Id}", sbomUrl = $"/api/repositories/{repository.Id}/sbom" });
+        return Results.Created($"/api/repositories/{repository.Id}", new { repositoryId = repository.Id, repository.Name, repository.ContentHash, applications = repository.Applications.Count, services = repository.Services.Count, dependencies = repository.Dependencies.Count, workflowCount = inventory.BuildWorkflows.Count + inventory.DeploymentWorkflows.Count, assessments = repository.Assessments.Select(a => new { a.Id, a.AssessmentType, a.Status }), warnings = inventory.Warnings, monitoringSnapshotId = monitoring.Snapshot.Id, policies = monitoring.Evaluations.Count, detailUrl = $"/api/repositories/{repository.Id}", sbomUrl = $"/api/repositories/{repository.Id}/sbom" });
     }
     catch (InvalidDataException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
-});
+}).DisableAntiforgery();
 app.MapGet("/api/assessments/{id:guid}", async (Guid id, IAssessmentRepository repository, CancellationToken ct) =>
 {
     var item = await repository.FindAsync(id, ct);
@@ -352,6 +587,7 @@ app.MapPost("/api/artifacts", async (Guid assessmentId, ArtifactType type, IForm
         var storagePath = await storage.StoreAsync(assessment.Id, Path.GetFileName(file.FileName), storageStream, ct);
         var artifact = new AssessmentArtifact { AssessmentId = assessment.Id, ArtifactType = type, OriginalFileName = Path.GetFileName(file.FileName), StoragePath = storagePath, MetadataJson = metadata };
         assessment.Artifacts.Add(artifact);
+    repository.AddArtifact(artifact);
         await repository.SaveChangesAsync(ct);
         return Results.Created($"/api/assessments/{assessment.Id}", new { artifact.Id, artifact.OriginalFileName, artifact.ArtifactType, artifact.UploadedDate });
     }
@@ -371,6 +607,7 @@ app.MapPost("/api/assessments/{id:guid}/insights/regenerate", async (Guid id, IA
     if (assessment.Insights.Any(i => i.Status is AIInsightStatus.Pending or AIInsightStatus.Running)) return Results.Conflict(new { error = "An insight generation is already in progress." });
     var insight = new AssessmentInsight { AssessmentId = assessment.Id };
     assessment.Insights.Add(insight);
+    repository.AddInsight(insight);
     await repository.SaveChangesAsync(ct);
     await queue.EnqueueAsync(assessment.Id, ct);
     return Results.Accepted($"/api/assessments/{id}", new { insightId = insight.Id, status = insight.Status });
@@ -384,6 +621,7 @@ app.MapPost("/api/assessments/{id:guid}/ask", async (Guid id, AskRequest request
     if (assessment.Status != AssessmentStatus.Completed || assessment.Result is null) return Results.Conflict(new { error = "Architecture questions require a completed assessment." });
     var record = new AIQuestion { AssessmentId = assessment.Id, Question = question, Status = generator.IsConfigured ? AIQuestionStatus.Pending : AIQuestionStatus.NotConfigured, ErrorMessage = generator.IsConfigured ? null : "Configure Azure OpenAI or OpenAI credentials to ask architecture questions." };
     assessment.AIQuestions.Add(record);
+    repository.AddQuestion(record);
     await repository.SaveChangesAsync(ct);
     if (!generator.IsConfigured) return Results.Problem(record.ErrorMessage, statusCode: StatusCodes.Status503ServiceUnavailable, extensions: new Dictionary<string, object?> { ["questionId"] = record.Id });
     try
@@ -412,6 +650,26 @@ await using (var scope = app.Services.CreateAsyncScope())
     await Phase3SchemaUpgrade.ApplyAsync(db);
     await Phase4SchemaUpgrade.ApplyAsync(db);
     await Phase5SchemaUpgrade.ApplyAsync(db);
+    await Phase6SchemaUpgrade.ApplyAsync(db);
+    await Phase7SchemaUpgrade.ApplyAsync(db);
+    var governance = scope.ServiceProvider.GetRequiredService<ArchitectureGovernanceEngine>();
+    if (!await db.ArchitecturePolicies.AnyAsync())
+    {
+        db.ArchitecturePolicies.AddRange(governance.DefaultPolicies());
+        await db.SaveChangesAsync();
+    }
+    if (!await db.TechnologyStandards.AnyAsync())
+    {
+        db.TechnologyStandards.AddRange(governance.DefaultStandards());
+        await db.SaveChangesAsync();
+    }
+    var untrackedRepositories = await db.RepositoryAnalyses.Select(r => new { r.Id, r.SummaryJson }).ToListAsync();
+    foreach (var stored in untrackedRepositories)
+    {
+        if (await db.ArchitectureSnapshots.AnyAsync(s => s.RepositoryAnalysisId == stored.Id)) continue;
+        var inventory = JsonSerializer.Deserialize<RepositoryInventory>(stored.SummaryJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+        if (inventory is not null) await SaveGovernanceSnapshotAsync(db, governance, stored.Id, inventory, CancellationToken.None);
+    }
     await SeedData.InitializeAsync(scope.ServiceProvider);
     var repo = scope.ServiceProvider.GetRequiredService<IAssessmentRepository>();
     var queue = scope.ServiceProvider.GetRequiredService<IAssessmentQueue>();
@@ -430,7 +688,9 @@ await using (var scope = app.Services.CreateAsyncScope())
         foreach (var insight in item.Insights.Where(i => i.Status is AIInsightStatus.Pending or AIInsightStatus.Running)) await insightQueue.EnqueueAsync(item.Id, CancellationToken.None);
         if (insightGenerator.IsConfigured && item.Status == AssessmentStatus.Completed && item.Result is not null && !item.Insights.Any(i => i.Status is AIInsightStatus.Pending or AIInsightStatus.Running or AIInsightStatus.Completed))
         {
-            item.Insights.Add(new AssessmentInsight { AssessmentId = item.Id });
+            var insight = new AssessmentInsight { AssessmentId = item.Id };
+            item.Insights.Add(insight);
+            db.AssessmentInsights.Add(insight);
             await repo.SaveChangesAsync(CancellationToken.None);
             await insightQueue.EnqueueAsync(item.Id, CancellationToken.None);
         }
@@ -466,6 +726,7 @@ public sealed class AssessmentWorker(IServiceScopeFactory scopes, IAssessmentQue
                 assessment.Result = engine.Execute(assessment);
                 assessment.Result.AssessmentId = assessment.Id;
                 RepositoryAssessmentEnricher.ApplyDiscoveryFindings(assessment);
+                repository.AddResult(assessment.Result);
                 assessment.Status = AssessmentStatus.Completed;
                 assessment.ErrorMessage = null;
             }
@@ -493,7 +754,9 @@ public sealed class AssessmentWorker(IServiceScopeFactory scopes, IAssessmentQue
             await repository.SaveChangesAsync(stoppingToken);
             if (assessment.Status == AssessmentStatus.Completed && assessment.Result is not null && !assessment.Insights.Any(i => i.Status is AIInsightStatus.Pending or AIInsightStatus.Running or AIInsightStatus.Completed))
             {
-                assessment.Insights.Add(new AssessmentInsight { AssessmentId = assessment.Id });
+                var insight = new AssessmentInsight { AssessmentId = assessment.Id };
+                assessment.Insights.Add(insight);
+                repository.AddInsight(insight);
                 await repository.SaveChangesAsync(stoppingToken);
                 await insightQueue.EnqueueAsync(assessment.Id, stoppingToken);
             }
@@ -505,6 +768,15 @@ public sealed record AskRequest(string Question);
 public sealed record CreateScenarioRequest(string Name, string? Description);
 public sealed record AddScenarioChangeRequest(ScenarioChangeType ChangeType, string Target, string? OldValue, string? NewValue);
 public sealed record DependencyRequest(string Source, string Target, string? DependencyType);
+public sealed record UpdatePolicyRequest(bool Enabled);
+public sealed record UpdateAlertStatusRequest(string Status);
+public sealed record CreateDecisionRequest(Guid RepositoryAnalysisId, string Title, string Context, string Decision, string Consequences, string Status);
+public sealed record ReviewPullRequestRequest(int PullRequestNumber, string Title, string? HeadRevision, string Diff);
+public sealed record GovernanceAdviceRequest(Guid RepositoryAnalysisId, string Question);
+public sealed record CreateInitiativeRequest(string Name, string? Description, int Priority = 3, string? Owner = null, DateTimeOffset? TargetCompletionDate = null, Guid? AssessmentId = null, Guid? ScenarioId = null, Guid? RecommendationId = null, Guid? RepositoryAnalysisId = null, int? ExpectedRiskReduction = null, int? ExpectedDebtReduction = null, int? InvestmentPoints = null);
+public sealed record UpdateInitiativeRequest(string Status, int? ActualRiskReduction = null, int? ActualDebtReduction = null);
+public sealed record CreateEngineeringMetricsRequest(double DeploymentFrequencyPerMonth, double LeadTimeDays, double ChangeFailureRatePercent, double MttrHours, string? Source = null);
+public sealed record BoardroomRequest(string Audience, string? Question = null);
 
 public static class SeedData
 {

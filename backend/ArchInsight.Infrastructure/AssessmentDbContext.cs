@@ -27,6 +27,17 @@ public sealed class AssessmentDbContext(DbContextOptions<AssessmentDbContext> op
     public DbSet<ScenarioChange> ScenarioChanges => Set<ScenarioChange>();
     public DbSet<ScenarioResult> ScenarioResults => Set<ScenarioResult>();
     public DbSet<ApplicationDependency> ApplicationDependencies => Set<ApplicationDependency>();
+    public DbSet<ArchitectureSnapshot> ArchitectureSnapshots => Set<ArchitectureSnapshot>();
+    public DbSet<DriftAlert> DriftAlerts => Set<DriftAlert>();
+    public DbSet<ArchitecturePolicy> ArchitecturePolicies => Set<ArchitecturePolicy>();
+    public DbSet<PolicyEvaluation> PolicyEvaluations => Set<PolicyEvaluation>();
+    public DbSet<TechnologyStandard> TechnologyStandards => Set<TechnologyStandard>();
+    public DbSet<ArchitectureDecision> ArchitectureDecisions => Set<ArchitectureDecision>();
+    public DbSet<PullRequestReview> PullRequestReviews => Set<PullRequestReview>();
+    public DbSet<TransformationInitiative> TransformationInitiatives => Set<TransformationInitiative>();
+    public DbSet<EngineeringMetrics> EngineeringMetrics => Set<EngineeringMetrics>();
+    public DbSet<KnowledgeNode> KnowledgeNodes => Set<KnowledgeNode>();
+    public DbSet<KnowledgeRelationship> KnowledgeRelationships => Set<KnowledgeRelationship>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -48,6 +59,30 @@ public sealed class AssessmentDbContext(DbContextOptions<AssessmentDbContext> op
         model.Entity<ScenarioChange>().Property(c => c.ChangeType).HasConversion<string>();
         model.Entity<ApplicationDependency>().HasIndex(d => new { d.RepositoryAnalysisId, d.Source, d.Target }).IsUnique();
         model.Entity<RepositoryAnalysis>().HasMany<ApplicationDependency>().WithOne(d => d.RepositoryAnalysis).HasForeignKey(d => d.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<ArchitectureSnapshot>().HasOne<RepositoryAnalysis>().WithMany().HasForeignKey(s => s.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<ArchitectureSnapshot>().HasIndex(s => new { s.RepositoryAnalysisId, s.CreatedDate });
+        model.Entity<DriftAlert>().HasOne<RepositoryAnalysis>().WithMany().HasForeignKey(a => a.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<DriftAlert>().HasIndex(a => new { a.RepositoryAnalysisId, a.Status, a.CreatedDate });
+        model.Entity<PolicyEvaluation>().HasOne<ArchitectureSnapshot>().WithMany().HasForeignKey(e => e.ArchitectureSnapshotId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<PolicyEvaluation>().HasOne<ArchitecturePolicy>().WithMany().HasForeignKey(e => e.ArchitecturePolicyId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<PolicyEvaluation>().Property(e => e.Status).HasConversion<string>();
+        model.Entity<PolicyEvaluation>().HasIndex(e => new { e.ArchitectureSnapshotId, e.ArchitecturePolicyId, e.Asset }).IsUnique();
+        model.Entity<ArchitecturePolicy>().HasIndex(p => p.Name).IsUnique();
+        model.Entity<TechnologyStandard>().HasIndex(s => new { s.Technology, s.VersionPattern }).IsUnique();
+        model.Entity<ArchitectureDecision>().HasOne<RepositoryAnalysis>().WithMany().HasForeignKey(d => d.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<PullRequestReview>().HasOne<RepositoryAnalysis>().WithMany().HasForeignKey(r => r.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
+        model.Entity<PullRequestReview>().HasIndex(r => new { r.RepositoryAnalysisId, r.PullRequestNumber, r.HeadRevision });
+        model.Entity<TransformationInitiative>().Property(i => i.Status).HasConversion<string>();
+        model.Entity<TransformationInitiative>().HasIndex(i => new { i.Status, i.TargetCompletionDate });
+        model.Entity<TransformationInitiative>().HasOne<Assessment>().WithMany().HasForeignKey(i => i.AssessmentId).OnDelete(DeleteBehavior.SetNull);
+        model.Entity<TransformationInitiative>().HasOne<Scenario>().WithMany().HasForeignKey(i => i.ScenarioId).OnDelete(DeleteBehavior.SetNull);
+        model.Entity<TransformationInitiative>().HasOne<Recommendation>().WithMany().HasForeignKey(i => i.RecommendationId).OnDelete(DeleteBehavior.SetNull);
+        model.Entity<TransformationInitiative>().HasOne<RepositoryAnalysis>().WithMany().HasForeignKey(i => i.RepositoryAnalysisId).OnDelete(DeleteBehavior.SetNull);
+        model.Entity<EngineeringMetrics>().HasIndex(m => new { m.RepositoryAnalysisId, m.RecordedAt });
+        model.Entity<KnowledgeNode>().HasIndex(n => new { n.RepositoryAnalysisId, n.NodeType, n.ExternalId }).IsUnique();
+        model.Entity<KnowledgeRelationship>().HasOne<KnowledgeNode>().WithMany().HasForeignKey(r => r.FromNodeId).OnDelete(DeleteBehavior.Restrict);
+        model.Entity<KnowledgeRelationship>().HasOne<KnowledgeNode>().WithMany().HasForeignKey(r => r.ToNodeId).OnDelete(DeleteBehavior.Restrict);
+        model.Entity<KnowledgeRelationship>().HasIndex(r => new { r.FromNodeId, r.ToNodeId, r.RelationshipType }).IsUnique();
         model.Entity<RepositoryAnalysis>().HasMany(r => r.Applications).WithOne(a => a.RepositoryAnalysis).HasForeignKey(a => a.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
         model.Entity<RepositoryAnalysis>().HasMany(r => r.Services).WithOne(s => s.RepositoryAnalysis).HasForeignKey(s => s.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
         model.Entity<RepositoryAnalysis>().HasMany(r => r.Dependencies).WithOne(d => d.RepositoryAnalysis).HasForeignKey(d => d.RepositoryAnalysisId).OnDelete(DeleteBehavior.Cascade);
@@ -98,6 +133,10 @@ public sealed class EfAssessmentRepository(AssessmentDbContext db) : IAssessment
     }
     public Task AddAsync(Assessment item, CancellationToken ct) => db.Assessments.AddAsync(item, ct).AsTask();
     public void AddVersion(AssessmentVersion version) => db.AssessmentVersions.Add(version);
+    public void AddInsight(AssessmentInsight insight) => db.AssessmentInsights.Add(insight);
+    public void AddQuestion(AIQuestion question) => db.AIQuestions.Add(question);
+    public void AddArtifact(AssessmentArtifact artifact) => db.AssessmentArtifacts.Add(artifact);
+    public void AddResult(AssessmentResult result) => db.AssessmentResults.Add(result);
     public Task SaveChangesAsync(CancellationToken ct) => db.SaveChangesAsync(ct);
 }
 

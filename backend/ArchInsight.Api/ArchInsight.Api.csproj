@@ -8,6 +8,8 @@
     <ProjectReference Include="..\ArchInsight.Analysis\ArchInsight.Analysis.csproj" />
     <ProjectReference Include="..\ArchInsight.Agents\ArchInsight.Agents.csproj" />
     <ProjectReference Include="..\ArchInsight.Simulation\ArchInsight.Simulation.csproj" />
+    <ProjectReference Include="..\ArchLens.Governance\ArchLens.Governance.csproj" />
+    <ProjectReference Include="..\ArchLens.Execution\ArchLens.Execution.csproj" />
   </ItemGroup>
   <ItemGroup><PackageReference Include="MediatR" Version="12.4.1" /><PackageReference Include="FluentValidation" Version="11.11.0" /></ItemGroup>
 </Project>

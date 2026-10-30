@@ -26,6 +26,7 @@ public sealed class AIInsightWorker(IServiceScopeFactory scopes, IAIInsightQueue
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             await using var scope = scopes.CreateAsyncScope();
             var repository = scope.ServiceProvider.GetRequiredService<IAssessmentRepository>();
+            var db = scope.ServiceProvider.GetRequiredService<ArchInsight.Infrastructure.AssessmentDbContext>();
             var generator = scope.ServiceProvider.GetRequiredService<IAIInsightGenerator>();
             var agents = scope.ServiceProvider.GetRequiredService<IEnumerable<IAgent>>();
             var assessment = await repository.FindAsync(assessmentId, stoppingToken);
@@ -67,6 +68,8 @@ public sealed class AIInsightWorker(IServiceScopeFactory scopes, IAIInsightQueue
                 insight.TokenUsage = generated.TokenUsage;
                 insight.Recommendations = generated.Recommendations.Select(r => new AIRecommendation { InsightId = insight.Id, Priority = r.Priority, Title = r.Title, Description = r.Description, BusinessBenefit = r.BusinessBenefit, EstimatedComplexity = r.EstimatedComplexity, ExpectedOutcome = r.ExpectedOutcome }).ToList();
                 insight.Roadmap = generated.Roadmap.Select(r => new AIInsightRoadmapItem { InsightId = insight.Id, Sequence = r.Sequence, Period = r.Period, ActivityType = ParseActivityType(r.ActivityType), Title = r.Title, Description = r.Description, ExpectedOutcome = r.ExpectedOutcome }).ToList();
+                db.AIRecommendations.AddRange(insight.Recommendations);
+                db.AIInsightRoadmapItems.AddRange(insight.Roadmap);
                 insight.Status = AIInsightStatus.Completed;
             }
             catch (Exception ex)

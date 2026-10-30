@@ -17,7 +17,8 @@ public sealed record AssessmentVersionView(int Version, string RuleVersion, stri
 public sealed record RepositoryApplicationView(string Name, string RepositoryPath, string Ecosystem, string Runtime, IReadOnlyList<string> Frameworks, string Database, string Hosting, bool Containerized, int BusinessImpact, int TechnicalRisk);
 public sealed record RepositoryServiceView(string Name, string RepositoryPath, string Version, int EndpointCount, IReadOnlyList<string> Endpoints, IReadOnlyList<string> Schemas, IReadOnlyList<string> AuthenticationSchemes);
 public sealed record RepositoryDependencyView(string Name, string Version, string Type, string Ecosystem, string RepositoryPath, string RiskLevel, string RiskReason);
-public sealed record RepositoryAssessmentView(Guid Id, string Name, string ContentHash, IReadOnlyList<RepositoryApplicationView> Applications, IReadOnlyList<RepositoryServiceView> Services, IReadOnlyList<RepositoryDependencyView> Dependencies, IReadOnlyList<RepositoryAgentStage> Stages);
+public sealed record RepositoryAgentStageView(Guid Id, int Sequence, string AgentName, string Status, string OutputJson, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt);
+public sealed record RepositoryAssessmentView(Guid Id, string Name, string ContentHash, IReadOnlyList<RepositoryApplicationView> Applications, IReadOnlyList<RepositoryServiceView> Services, IReadOnlyList<RepositoryDependencyView> Dependencies, IReadOnlyList<RepositoryAgentStageView> Stages);
 public sealed record AssessmentDetail(Guid Id, string Name, string OrganizationName, AssessmentType AssessmentType, AssessmentStatus Status, DateTimeOffset CreatedDate, DateTimeOffset? CompletedDate, int? Score, string? Recommendation, string? ExecutiveSummary, int ApplicationCount, string? ErrorMessage, IReadOnlyList<ScoreCardView> ScoreCards, IReadOnlyList<FindingView> Findings, IReadOnlyList<RecommendationView> Recommendations, IReadOnlyList<string> ArtifactNames, IReadOnlyList<AssessmentInsightView> Insights, IReadOnlyList<AIQuestionView> AIQuestions, Guid? RepositoryAnalysisId, IReadOnlyList<AssessmentVersionView> Versions, RepositoryAssessmentView? Repository);
 
 public sealed record FindingChangeView(string Title, string Description, string Category, FindingSeverity Severity);
@@ -30,6 +31,10 @@ public interface IAssessmentRepository
     Task<IReadOnlyList<Assessment>> ListAsync(CancellationToken ct);
     Task AddAsync(Assessment item, CancellationToken ct);
     void AddVersion(AssessmentVersion version);
+    void AddInsight(AssessmentInsight insight);
+    void AddQuestion(AIQuestion question);
+    void AddArtifact(AssessmentArtifact artifact);
+    void AddResult(AssessmentResult result);
     Task SaveChangesAsync(CancellationToken ct);
 }
 

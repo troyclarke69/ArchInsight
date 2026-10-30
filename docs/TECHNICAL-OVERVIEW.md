@@ -1,20 +1,20 @@
 # ArchInsight AI — Technical Overview
 
-**Document status:** describes the repository as implemented on 2026-10-25.
-**Product phase:** Phase 5 transformation simulation and portfolio planning.
+**Document status:** describes the repository as implemented on 2026-10-30.
+**Product phase:** Phases 1–7, including architecture governance and transformation execution.
 **Audience:** engineers preparing the next product phase, maintainers, and technical reviewers.
 
 ## 1. Scope and current behavior
 
-ArchInsight is a web application for creating and reviewing three rule-based assessment types, discovering repository inventories, and evaluating modernization scenarios:
+ArchInsight is a demo architecture intelligence and transformation platform. It supports three rule-based assessment types, repository discovery, governance snapshots, and scenario-driven modernization planning:
 
 - Modernization
 - Data maturity
 - Service consistency
 
-The current product supports manual JSON assessment creation and ZIP-based repository discovery. Repository analysis extracts structured .NET, Node.js, Python, Docker, GitHub Actions, and OpenAPI metadata; generates modernization/service artifacts; executes specialized deterministic agent stages; persists inventory and a CycloneDX SBOM; and queues applicable assessments. The platform also supports optional AI insights and Q&A, historical score trends, assessment comparison, an inventory dashboard, a risk heatmap, printable assessment reports, deterministic transformation scenarios, portfolio prioritization, dependency impact analysis, and an executive investment roadmap.
+The current product supports manual JSON assessment creation and ZIP-based repository discovery. Repository analysis extracts structured .NET, Node.js, Python, Docker, GitHub Actions, and OpenAPI metadata; generates modernization/service artifacts; executes specialized deterministic agent stages; persists inventory and a CycloneDX SBOM; and queues applicable assessments. Phase 6 adds repeatable architecture snapshots, drift alerts, policy evaluation, technology lifecycle standards, manual pull-request diff review, review queues, and governance advice. Phase 7 adds recommendation/scenario-linked transformation initiatives, execution tracking, heuristic forecasts, internal benchmark bands, manually entered engineering metrics, a repository knowledge graph, and audience-oriented AI boardroom output. Existing capabilities include optional AI insights/Q&A, historical assessment trends, printable reports, scenario simulation, portfolio prioritization, dependency impact analysis, and roadmaps.
 
-AI is an optional advisory layer. Deterministic scores, findings, discovery rules, simulation projections, and recommendations remain authoritative. Discovery reads repository manifests and contracts; it is not a source-code semantic analyzer, runtime scanner, vulnerability database, hosted Git integration, or proof of deployed behavior. Simulation outputs are relative planning heuristics, not delivery estimates or financial ROI. Dependency edges are explicitly recorded and should be validated by architecture teams. Phases 4–5 do not add multi-tenant authorization or production agent controls.
+AI is an optional advisory layer. Deterministic scores, findings, discovery rules, governance checks, and simulation projections remain the source evidence; AI narratives do not change those values. Discovery reads repository manifests and contracts; it is not a source-code semantic analyzer, runtime scanner, vulnerability database, hosted Git integration, or proof of deployed behavior. Phase 6 scans are triggered by uploaded ZIPs, not by an unattended scheduler. Phase 7 forecasts, benchmark bands, and investment measures are demo heuristics, not delivery guarantees or financial ROI. Engineering metrics are entered manually and correlations are descriptive, not causal. Dependency edges should be validated by architecture teams. The project has no authentication, authorization, tenant isolation, or production agent controls.
 
 ## 2. Architecture
 
@@ -25,6 +25,8 @@ flowchart LR
     Api --> AI[ArchInsight.AI: prompts and provider adapter]
     Api --> Analysis[ArchInsight.Analysis: safe ZIP and manifest analyzer]
     Api --> Agents[ArchInsight.Agents: specialized orchestration]
+    Api --> Governance[ArchLens.Governance: snapshots, drift, policies]
+    Api --> Execution[ArchLens.Execution: portfolio forecasts and benchmarks]
     Api --> Infra[Infrastructure: EF Core, file storage, queue]
     App --> Domain[Domain entities and enums]
     Infra --> Domain
@@ -42,7 +44,7 @@ flowchart LR
     Api --> Files[(uploads/{assessmentId}/*.json)]
 ```
 
-The solution is split into six .NET projects:
+The solution is split into nine .NET projects:
 
 | Project | Responsibility |
 | --- | --- |
@@ -53,6 +55,8 @@ The solution is split into six .NET projects:
 | `backend/ArchInsight.AI` | AI provider adapter, prompt contracts/versioning, structured output models, and local evidence-confidence classifier |
 | `backend/ArchInsight.Analysis` | ZIP inspection, project/package/OpenAPI/Docker/workflow parsing, normalized inventory DTOs, and CycloneDX generation |
 | `backend/ArchInsight.Agents` | `IAgent` contracts, ordered orchestration, deterministic artifact, modernization, service-governance, and technology-risk agents, and executive-stage contracts |
+| `backend/ArchLens.Governance` | Immutable repository snapshots, drift comparison, default policies/standards, policy evaluation, and static pull-request diff scoring |
+| `backend/ArchLens.Execution` | Transformation forecasts and internal benchmark score bands over governance snapshots and active initiatives |
 
 The frontend is a Next.js 15 App Router application in `app/`, written in TypeScript and styled with project CSS. It does not currently use Tailwind or shadcn/ui. The SQL Server reference DDL is in `database/sql/001-create-schema.sql`.
 
@@ -72,7 +76,7 @@ Database selection is controlled by `Database:Provider`:
 
 - `Development` launch profile sets `ASPNETCORE_ENVIRONMENT=Development`; `appsettings.Development.json` selects SQLite. The database file is `backend/ArchInsight.Api/archinsight.db` when run with the project launch profile.
 - The base `appsettings.json` selects SQL Server. Configure `ConnectionStrings:SqlServer` for the intended SQL Server instance before using that configuration.
-- The API bootstraps with EF Core `EnsureCreated` and then runs additive Phase 3 and Phase 4 schema-upgrade code to support existing SQLite/SQL Server demo databases. It does not apply EF migrations. SQL Server reference and additive scripts live in `database/sql/`.
+- The API bootstraps with EF Core `EnsureCreated` and then runs additive provider-specific schema upgrades through Phase 7 for existing SQLite/SQL Server demo databases. It does not apply EF migrations. SQL Server reference and additive scripts live in `database/sql/` (`001`–`006`).
 - `Cors:Origins` defaults to localhost ports 3000 and 3001. Configure origins for other frontend hosts.
 - The frontend reads `NEXT_PUBLIC_API_BASE_URL`; if unset, it uses `http://localhost:5080`.
 - Provider configuration is read from `AI:AzureOpenAI:ChatCompletionsUrl`, `AI:AzureOpenAI:ApiKey`, `AI:AzureOpenAI:Deployment`, `AI:OpenAI:ApiKey`, and `AI:OpenAI:Model`. Use environment variables with double underscores or .NET user secrets for credentials. Azure is selected when its full Chat Completions URL, key, and deployment are all configured; otherwise OpenAI is selected when key and model are configured. If neither is configured, deterministic assessments remain fully usable while AI features report not configured.
@@ -98,6 +102,14 @@ RepositoryAnalysis 1 ─── * TechnologyDependency
 RepositoryAnalysis 1 ─── * SoftwareInventory
 RepositoryAnalysis 1 ─── * RepositoryAgentStage
 Assessment 1 ─── * AssessmentVersion
+RepositoryAnalysis 1 ─── * ArchitectureSnapshot
+RepositoryAnalysis 1 ─── * DriftAlert
+ArchitectureSnapshot 1 ─── * PolicyEvaluation
+RepositoryAnalysis 1 ─── * ArchitectureDecision
+RepositoryAnalysis 1 ─── * PullRequestReview
+Assessment/Scenario/Recommendation 1 ─── * TransformationInitiative (optional links)
+RepositoryAnalysis 1 ─── * EngineeringMetrics
+RepositoryAnalysis 1 ─── * KnowledgeNode 1 ─── * KnowledgeRelationship
 ```
 
 ### Assessment
@@ -117,6 +129,10 @@ Enums are persisted as strings. Relationships cascade from assessment to its art
 `AssessmentInsight` stores AI-generated narrative fields, confidence, status, provider model, prompt version, token count, and timestamps. Its recommendations and roadmap are child records. `AIQuestion` stores each submitted question and answer with provider metadata and status. Insight generations are append-only: regeneration creates a new insight row and the detail API returns the newest first. The provider never receives uploaded JSON or raw artifact metadata; it receives a compact payload derived from the persisted deterministic result. The evidence-confidence classifier runs locally from evidence coverage and is not a model self-rating.
 
 `RepositoryAnalysis` represents one uploaded ZIP and stores its local archive path, SHA-256 hash, normalized summary, and SBOM. Child rows store discovered applications, OpenAPI services/routes/schemas/auth schemes, package/framework/container dependencies and rule risk, software inventory categories, and each agent's persisted stage output. Multiple generated assessments can point to one repository analysis. `AssessmentVersion` stores an incremented result snapshot plus ruleset, prompt, and assessment labels. Repository maturity scorecards (Security, DevOps, Cloud Readiness, Observability) are auxiliary signals and are excluded from the deterministic overall score.
+
+`ArchitectureSnapshot` captures repository counts, framework/technology JSON inventories, a content hash, risk, modernization, debt, cloud readiness, security, consistency, and maturity dimensions. `DriftAlert` records comparisons between two snapshots; `ArchitecturePolicy` and `PolicyEvaluation` store enabled local rules and per-asset PASS/WARNING/FAIL results; `TechnologyStandard` stores the demo lifecycle catalog. Governance history is initiated when a ZIP is uploaded through discovery/monitoring. Existing repository rows are given a baseline snapshot at API startup if they have none; prior history cannot be reconstructed. `ArchitectureDecision` stores lightweight ADR records. `PullRequestReview` stores a manual diff's hash, revision, findings, and static risk score.
+
+`TransformationInitiative` may link to an assessment, simulated scenario, recommendation, and discovered repository. It stores status, priority, owner, target completion, expected impact and actual measured risk/debt change. Statuses are Planned, Approved, InProgress, Blocked, Completed, and Cancelled. `EngineeringMetrics` stores manually entered deployment frequency, lead time, change-failure rate, MTTR, and recording source. `KnowledgeNode` and `KnowledgeRelationship` hold repository graph nodes and edges, synchronized when its graph endpoint is requested. Optional initiative references use set-null delete behavior. Governance records follow their configured snapshot/repository relationships; graph refresh removes relationship rows before stale nodes.
 
 ## 5. Assessment lifecycle
 
@@ -236,6 +252,18 @@ The API uses JSON string values for enums. Local base URL is `http://localhost:5
 | `GET /api/inventory` | List repository architecture inventories with applications, APIs, dependencies, agent stages, assessment links, and SBOM data | `200` |
 | `GET /api/repositories/{id}` | Fetch one repository inventory | `200`, `404` |
 | `GET /api/repositories/{id}/sbom` | Download the generated CycloneDX 1.5 JSON SBOM | `200`, `404` |
+| `GET /api/governance/overview` and `GET /api/governance/repositories/{id}` | Governance KPIs and repository snapshots, alerts, policy evaluations, decisions, and diff reviews | `200`, `404` |
+| `POST /api/repositories/{id}/monitor` | Re-scan an existing repository from a multipart ZIP and persist a governance snapshot | `201`, `400`, `404`, `413` |
+| `GET /api/governance/policies`, `PUT /api/governance/policies/{id}` | List seeded policies and enable/disable one | `200`, `404` |
+| `GET /api/governance/standards` | List the technology lifecycle catalog | `200` |
+| `POST /api/governance/alerts/{id}/status`, `GET/POST /api/governance/decisions` | Triage drift and manage ADR records | `200`, `201`, `404` |
+| `POST /api/repositories/{id}/pull-requests/review`, `GET /api/repositories/{id}/pull-requests` | Score a manually supplied unified diff and list review history | `200`, `201`, `400`, `404` |
+| `POST /api/governance/advice` | Ask for AI governance advice grounded in repository snapshots and assessment context | `200`, `404`, `502`, `503` |
+| `GET /api/transformation/portfolio`, `GET /api/transformation/recommendations` | Portfolio execution KPIs, forecasts, benchmark, and convertible recommendations | `200` |
+| `POST /api/transformation/initiatives`, `PUT /api/transformation/initiatives/{id}` | Create an initiative or update status and measured impact | `201`, `200`, `400`, `404` |
+| `POST /api/transformation/repositories/{id}/engineering-metrics` | Record delivery metrics manually | `201`, `400`, `404` |
+| `GET /api/transformation/knowledge-graph/{id}` | Synchronize and return repository knowledge nodes and relationships | `200`, `404` |
+| `POST /api/transformation/boardroom` | Generate an audience-specific AI briefing or strategy-advisor response | `200`, `404`, `502`, `503` |
 
 Create request:
 
@@ -261,11 +289,13 @@ Insight regeneration requires an enabled provider and a completed deterministic 
 
 The manual assessment dialog accepts a name, organization, assessment type, and JSON files. Repository intake is a separate modal in the dashboard. Assessment detail renders deterministic results separately from AI insights, generated repository technologies/dependency risks, auxiliary maturity dimensions, version metadata, AI recommendations/roadmap, and saved Q&A. The print action opens the browser print dialog; select “Save as PDF” to export the currently rendered executive assessment. The shell still uses demo labels (Northstar Group, Jordan/admin); organization is editable.
 
+The `/monitoring` page shows governance KPIs, repository history, policies and lifecycle standards, drift review, manual pull-request diff review, ADRs, and AI governance advice. A new ZIP scan requires a selected existing repository; it creates a new snapshot. The `/transformation` page provides recommendation/scenario conversion, status lanes, completion impact recording, risk/debt/maturity forecasts, internal benchmark dimensions, repository graph inventory, manual engineering metric entry, AI boardroom/strategy briefs, and a browser-print quarterly report. These pages call explicit API endpoints and do not trigger scans or AI generations merely when loaded (except graph synchronization, which updates the graph when requested).
+
 If the API is unreachable, the overview displays an API warning and disables assessment submission. If upload fails after assessment creation, the assessment record remains pending (and may contain earlier successful uploads); the current interface does not offer a resume-upload flow from that error state.
 
 ## 10. Seed data
 
-At API startup, `EnsureCreated` runs and the seeder checks whether any assessment exists. If the database is empty, it creates one completed assessment for each type under Northstar Group and runs the same deterministic engine used for user-created assessments. The modernization seed contains Customer Portal, Order API, Billing Service, and Reporting Portal records with intentionally poor characteristics. The other seed records intentionally omit data capabilities and vary service naming/version/error/authentication fields.
+At API startup, `EnsureCreated` and additive schema upgrades run first. The assessment seeder checks whether any assessment exists; if the database is empty, it creates one completed assessment for each type under Northstar Group and runs the same deterministic engine used for user-created assessments. The modernization seed contains Customer Portal, Order API, Billing Service, and Reporting Portal records with intentionally poor characteristics. The other seed records intentionally omit data capabilities and vary service naming/version/error/authentication fields. Governance's demo policies and technology standards are seeded independently when their respective tables are empty. Existing repositories without snapshots receive a baseline snapshot at startup.
 
 If any assessment already exists, seeding is skipped entirely. The seed artifact JSON is stored in database metadata; seed files are not written to the uploads folder.
 
@@ -317,9 +347,15 @@ Current implementation limits to account for before building on it:
 
 - The queue is in-memory and unbounded; startup recovery retries persisted `Running`/`Pending` records, but there is no distributed queue, concurrency policy, retry/backoff policy, or cancellation endpoint.
 - `GET /api/assessments` loads assessments and their result graphs before sorting in application memory. This avoids SQLite's unsupported `DateTimeOffset` ordering translation and is suitable only for small demo datasets.
-- Database initialization uses `EnsureCreated` plus focused Phase 3/4/5 additive schema upgrades, not versioned EF migrations. Review the startup SQL and standalone SQL Server scripts against the EF model when adding future schema changes.
+- Database initialization uses `EnsureCreated` plus focused additive schema upgrades through Phase 7, not versioned EF migrations. Review the startup SQL and standalone SQL Server scripts (`database/sql/001`–`006`) against the EF model when adding future schema changes.
 - Uploads are local filesystem files. There is no artifact download/delete endpoint, retention policy, malware scan, storage abstraction beyond the local implementation, or cleanup of a disk file if the subsequent database save fails.
 - The API has no authentication, authorization, tenant isolation, rate limits, or audit trail. Workspace/organization names are data fields rather than security boundaries.
+- Governance snapshots are generated on ZIP upload or startup backfill; there is no recurring scheduler, GitHub App/OAuth connection, hosted repository discovery, webhook, or automatic pull-request retrieval/comment posting. The static diff reviewer uses a manually supplied unified diff and does not replace a code/security review.
+- Governance policy rules inspect discovered static evidence (for example declared authentication schemes or container files), not runtime endpoint behavior. Default policies and lifecycle standards are demo values and require organization-specific review before being treated as controls. Historical changes before the first baseline snapshot cannot be recovered.
+- Transformation risk/debt/maturity forecasts use saved snapshot values and active initiative estimates with simple linear horizon assumptions. Investment points are relative effort proxies, not cost. Internal benchmark tiers are fixed local score bands, not external peer benchmarks.
+- EngineeringMetrics are manually entered. The API reports Pearson correlations for matched repositories, but the small observational dataset cannot establish causation and has no integration to CI/CD, incident, or deployment telemetry.
+- The knowledge graph synchronizes repository inventory, relationships, matched findings/recommendations, and initiatives when queried; the UI renders a navigable inventory list rather than a full graph canvas. It is limited to detected or explicitly recorded relationships and should not be treated as a complete runtime dependency map.
+- Quarterly review can be printed or saved as PDF through the browser. There is no generated PowerPoint/PPTX export or server-side PDF generation. AI boardroom and strategy briefs require a configured provider and remain advisory.
 - Repository ingestion does not clone or connect to hosted Git providers. It accepts uploaded ZIP archives. OpenAPI YAML, arbitrary languages, build graphs, transitive package lock resolution, source-code AST/semantic analysis, and runtime/cloud inventory are out of scope for this initial discovery implementation.
 - Version lag is evaluated against a small local policy baseline, not live package registries. There is no CVE/OSV/NVD feed, vulnerability scanner, license policy, secret scanner, malware scanner, or signed/provenance SBOM.
 - Discovery pipeline agent results are persisted, but the pipeline has no distributed scheduler, per-stage retries, concurrency limit, compensation workflow, user cancellation, or multi-tenant isolation. A process crash can leave stage rows incomplete; assessment work recovery does not reconstruct a partially completed repository import.
@@ -328,9 +364,8 @@ Current implementation limits to account for before building on it:
 - AI generation has no retry/backoff policy, request rate limits, concurrency limit, spend budget enforcement, provider circuit breaker, streaming, or user cancellation. Queue state is persisted, but the underlying channels are in-memory and unbounded.
 - Insight summary word-count and recommendation/roadmap count requirements are validated at the provider boundary; provider output can fail validation and be recorded as a failed insight. The current manual regenerate route permits new generations after prior failures or completion, which can incur provider cost.
 - The AI provider adapter is configured through environment/configuration, but the UI does not expose provider settings. The application has no authentication, authorization, tenant isolation, or per-user audit, so it is suitable only for a trusted demo environment.
-- The project has no automated test project or CI pipeline in the repository. Build checks do not prove behavior against a running SQL Server or external AI provider.
 - The project has no automated test project or CI pipeline in the repository. Build checks do not prove ZIP boundary handling, SQLite/SQL Server upgrade behavior, provider calls, or assessment scoring at runtime.
-- Next-phase seams include `IAgent`, `IAgentOrchestrator`, repository inventory entities, `IAIInsightGenerator`, and `AssessmentVersion`. Hosted Git provider connections, richer source/dependency analysis, security/operations maturity evidence, full SBOM and vulnerability analysis, server-generated PDF, model budget controls, PostgreSQL, deployment, and auth remain future work.
+- Remaining seams include hosted Git provider connections, richer source/dependency analysis, security/operations maturity evidence, full SBOM and vulnerability analysis, PowerPoint and server-side PDF exports, model budget controls, PostgreSQL, deployment, telemetry integrations, authorization, and tenant isolation.
 
 ## 15. Transformation simulator and portfolio planning
 
@@ -343,3 +378,29 @@ System dependency edges are stored in `ApplicationDependencies`. Architects can 
 Scenario API routes are `GET/POST /api/assessments/{id}/scenarios`, `POST /api/scenarios/{id}/changes`, `POST /api/scenarios/{id}/simulate`, and `GET /api/scenarios/compare?scenarioId=...`. Optional `POST /api/scenarios/{id}/advisor` passes the baseline, changes, and deterministic outcome to the existing AI Q&A adapter for an executive explanation. Provider output is advisory and does not affect computed scores. Phase 5 schema uses additive startup DDL and `database/sql/004-phase5-simulator.sql` for SQL Server.
 
 The simulator deliberately avoids dollar estimates. Its score deltas, effort bands, cloud-readiness changes, prioritization factors, dependency completeness, and roadmap windows are demo heuristics that require review before investment decisions. There is no automated dependency graph extraction, scenario deletion/version history, collaborative editing, cost model, implementation schedule, impact propagation into assessment findings, or AI-generated numeric projection.
+
+## 16. Architecture governance and monitoring
+
+`ArchLens.Governance.ArchitectureGovernanceEngine` creates a point-in-time snapshot from a normalized `RepositoryInventory`. Its SHA-256 hash covers canonical serialized application, service, dependency, and software-inventory data. Snapshot risk is an average of local application/dependency risk labels; modernization is `100 - risk`, technical debt currently mirrors risk, and cloud/security/consistency/maturity are static-evidence indicators. These dimensions are not measurements of live systems.
+
+The API records a snapshot and per-asset policy evaluations after a ZIP is analyzed. Re-scanning through `POST /api/repositories/{id}/monitor` analyzes another ZIP against the existing repository record and compares it with the previous snapshot. Comparison checks include newly added legacy dependencies/applications, runtime downgrade, removed declared service authentication, service-name convention drift, floating dependency versions, and material risk/modernization score changes. Alerts are saved with open status; the UI lets users move them through triage statuses. Policy evaluations are not retroactively recalculated when a policy is toggled; the next scan uses the current enabled policy set.
+
+Six local policies cover legacy .NET Framework, SQL Server older than 2019, missing accepted JWT/bearer/OAuth evidence, missing container evidence, no detected OpenAPI service for an application repository, and missing recognized telemetry/logging package. A violation becomes FAIL for critical/high policy severities and WARNING for medium/lower severities; a nonviolating policy receives a repository-level PASS. Empty evidence is not proof of a runtime violation. The seeded lifecycle standards cover selected .NET, SQL Server, and Node.js versions and are a local display/reference catalog, not a complete standards engine.
+
+The governance dashboard aggregates latest snapshots, open alerts, evaluation outcomes, and technology risk. Its review queue is composed from stored open alerts, failed policy evaluations, and high-risk manual diff reviews. Pull request analysis checks changed manifest/OpenAPI/security paths and selected removed runtime/authentication lines; it does not parse a full GitHub pull request, execute tests, or post comments. The seeded defaults are installed when the relevant tables are empty. SQLite and SQL Server startup DDL is in `Phase6SchemaUpgrade`; SQL Server also has `database/sql/005-phase6-monitoring.sql`.
+
+There is no hosted repository scheduler or GitHub connection. Users provide ZIPs for repeated snapshots and paste unified diffs for review. No historical trend before the first snapshot can be reconstructed. Changes in scanner coverage or rule versions can affect comparisons because the analysis ruleset label is not included in every snapshot hash.
+
+## 17. Transformation execution and executive decision support
+
+`ArchLens.Execution.TransformationForecastEngine` computes forecasts from stored governance snapshots and initiative assumptions. The debt velocity is the difference between the first and latest snapshot's `TechnicalDebt` divided by elapsed whole-month buckets (minimum one month when two snapshots have the same date). Because current snapshot technical debt mirrors its risk score, this is a risk-derived proxy. Each horizon adjusts the latest baseline with a simple historical velocity and a linear fraction of expected impact from Approved/InProgress initiatives. Target date determines the assumed completion duration; an unset date defaults to six months. The output clamps risk, debt, and maturity to 0–100. No scenario is re-run and no AI model produces numeric forecast values.
+
+Initiatives can be created from a persisted `Recommendation`, optionally linked to a simulated `Scenario`, `Assessment`, and `RepositoryAnalysis`. Scenario risk/debt/effort estimates can prefill the initiative's expected values; owners can edit expected impacts and priority. Status updates permit Planned, Approved, InProgress, Blocked, Completed, and Cancelled. When marking work completed, the interface asks for measured risk and debt reduction; those values feed completed investment KPIs. There is no budget/currency model, initiative history, concurrency/version check, notification, or multi-user assignment workflow.
+
+The portfolio dashboard groups work by status and aggregates completion, blocked/active counts, investment points, and actual impact from completed initiatives. Its “investment” figure is effort points, not money. The internal benchmark averages current repository snapshot indicators and maps them to Emerging/Developing/Advanced/Leading score bands (0–44, 45–69, 70–84, 85–100); governance uses a fixed demo score and observability currently uses the consistency indicator as a proxy. No external benchmark dataset is consulted.
+
+Engineering metrics are submitted manually per repository. For repositories with both a latest architecture snapshot and latest metrics, the API computes Pearson correlations for lead time versus risk, change failure rate versus inconsistency, and deployment frequency versus maturity. Values need at least two matched repositories and nonzero variance to be meaningful; they are descriptive associations, not evidence that architecture caused a delivery outcome.
+
+The knowledge graph route synchronizes repository, application, service, technology, dependency, matched finding/recommendation, and linked initiative nodes into `KnowledgeNode` and `KnowledgeRelationship`. Application-to-initiative and finding/recommendation-to-application edges are based on name text matches; dependency edges use repository inventory or manually entered `ApplicationDependency` records. Graph sync removes stale nodes/edges for the selected repository when the endpoint is refreshed. The UI displays an associated-node list and relationships, not a force-directed graph canvas. Repository ZIP analysis remains incomplete as a runtime dependency map.
+
+`POST /api/transformation/boardroom` prepares current assessment, snapshot, initiative, and forecast context for a configured AI provider. Audiences include CTO, CIO, Architecture Review Board, Engineering Leadership, and Strategy Advisor; the latter asks for ranked strategic investment recommendations. The provider returns narrative only, and the context distinguishes evidence from heuristic projections. The dashboard also prints a fixed quarterly report from API portfolio data through the browser print dialog; choose Save as PDF. There is no PPTX export or server-rendered report. Phase 7 DDL is applied by `Phase7SchemaUpgrade` and is also available as `database/sql/006-phase7-transformation.sql`.
